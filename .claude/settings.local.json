@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs grep -l \"capiq\")",
+      "Bash(ls -la /c/Users/rturpin/OneDrive*)",
+      "Bash(xargs ls -d)",
+      "Bash(git clone https://github.com/nickderobertis/capiq-excel-downloader-py.git .)",
+      "Bash(git init)",
+      "Bash(git remote add origin https://github.com/nickderobertis/capiq-excel-downloader-py.git)",
+      "Bash(git fetch origin)",
+      "Bash(git checkout -b main origin/master)",
+      "Bash(git add -A)",
+      "Bash(git commit -m \"Initial clone of capiq-excel-downloader-py from upstream\" --no-verify)",
+      "Bash(git checkout -b feat/capiq-pro-compat-modernize)"
+    ]
+  }
+}
