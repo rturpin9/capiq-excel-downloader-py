@@ -26,7 +26,11 @@ def download_capiq_ids(ids: Sequence[str], outpath: str = 'capiq ids.csv', folde
     builder = None
     if config is not None:
         from capiq_excel.formulas import get_builder
-        dialect = config.resolve_dialect()
+        from capiq_excel.config import FormulaDialect
+        dialect = config.formula_dialect
+        if dialect == FormulaDialect.AUTO:
+            # AUTO wasn't resolved upstream; default to CIQ (safe fallback)
+            dialect = config.resolve_dialect(ciq_compat_available=True)
         builder = get_builder(dialect)
 
     print('Creating XLSX files with commands to get ids')
@@ -45,18 +49,24 @@ def download_capiq_ids(ids: Sequence[str], outpath: str = 'capiq ids.csv', folde
 def populate_all_ids_in_folder(folder, restart=True, config=None):
     excel = _start_excel_with_addins_and_attach()
 
-    # When config is available, detect runtime and load the right add-in
-    if config is not None:
-        from capiq_excel.addin import load_capiq_addin
+    try:
+        # When config is available, detect runtime and load the right add-in
+        if config is not None:
+            from capiq_excel.addin import load_capiq_addin
+            try:
+                load_capiq_addin(excel, config)
+            except Exception as e:
+                print(f'Warning: Could not detect/load add-in ({e}), falling back to default behavior')
+
+        file_tracker = FileProcessTracker(folder=folder, restart=restart, file_types=('xlsx',))
+
+        for file in file_tracker.file_generator():
+            populate_capiq_ids_for_file(file, excel, config=config)
+    finally:
         try:
-            load_capiq_addin(excel, config)
-        except Exception as e:
-            print(f'Warning: Could not detect/load add-in ({e}), falling back to default behavior')
-
-    file_tracker = FileProcessTracker(folder=folder, restart=restart, file_types=('xlsx',))
-
-    for file in file_tracker.file_generator():
-        populate_capiq_ids_for_file(file, excel, config=config)
+            excel.Quit()
+        except Exception:
+            pass
 
 
 def combine_all_capiq_ids_xlsx(infolder, outpath, restart=True):
@@ -87,7 +97,9 @@ def _remove_useless_cols(df):
     """
     blank_cols = [col for col in df.columns if 'blank' in col.lower()]
     useless_cols = ['ID'] + blank_cols
-    df.drop(useless_cols, axis=1, inplace=True)
+    existing_cols = [col for col in useless_cols if col in df.columns]
+    if existing_cols:
+        df.drop(existing_cols, axis=1, inplace=True)
 
 
 def _get_ids_from_csv_path(csv_path: str) -> List[str]:

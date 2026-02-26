@@ -51,7 +51,7 @@ def _get_outpath_and_df_of_headers(outpath):
     if outpath is None:
         outpath = 'combined.csv'
     # If outpath doesn't exists, must create df from scratch
-    if (outpath is None) or (not os.path.exists(outpath)):
+    if not os.path.exists(outpath):
         df_of_headers = pd.DataFrame()
     # If exists, load headers
     else:
@@ -74,7 +74,7 @@ def _append_df_to_csv(df_for_append, df_of_headers, outpath, all_columns):
     df_of_headers = pd.DataFrame(columns=all_columns)
 
     # Append new data, with or without writing headers to file
-    full_df = df_of_headers.append(df_for_append)
+    full_df = pd.concat([df_of_headers, df_for_append], ignore_index=True)
     full_df[all_columns].to_csv(outpath, mode='a', index=False, header=header, encoding='utf8')
 
     # Go back to file and update the headers
@@ -112,7 +112,7 @@ def _replace(src, dst):
             time.sleep(.1)
             retries += 1
             if retries > 100:
-                print(f'Retried removing {filepath} over 10s but still failed.')
+                print(f'Retried removing {src} over 10s but still failed.')
                 raise e
 
 

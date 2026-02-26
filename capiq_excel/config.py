@@ -22,6 +22,7 @@ class FormulaDialect(Enum):
     AUTO = "auto"
     CIQ = "ciq"
     SPG = "spg"
+    SNL = "snl"
 
 
 class AddinMode(Enum):
@@ -106,16 +107,40 @@ class CapiqConfig:
         mode_str = os.environ.get("CAPIQ_ADDIN_MODE", "auto").lower()
         scope_str = os.environ.get("CAPIQ_REFRESH_SCOPE", "worksheet").lower()
 
+        try:
+            dialect = FormulaDialect(dialect_str)
+        except ValueError:
+            print(f'Warning: Invalid CAPIQ_FORMULA_DIALECT "{dialect_str}", defaulting to "auto"')
+            dialect = FormulaDialect.AUTO
+        try:
+            mode = AddinMode(mode_str)
+        except ValueError:
+            print(f'Warning: Invalid CAPIQ_ADDIN_MODE "{mode_str}", defaulting to "auto"')
+            mode = AddinMode.AUTO
+        try:
+            scope = RefreshScope(scope_str)
+        except ValueError:
+            print(f'Warning: Invalid CAPIQ_REFRESH_SCOPE "{scope_str}", defaulting to "worksheet"')
+            scope = RefreshScope.WORKSHEET
+
+        def _safe_int(env_var: str, default: int) -> int:
+            raw = os.environ.get(env_var, str(default))
+            try:
+                return int(raw)
+            except ValueError:
+                print(f'Warning: Invalid {env_var} "{raw}", defaulting to {default}')
+                return default
+
         return cls(
-            formula_dialect=FormulaDialect(dialect_str),
-            addin_mode=AddinMode(mode_str),
-            refresh_scope=RefreshScope(scope_str),
+            formula_dialect=dialect,
+            addin_mode=mode,
+            refresh_scope=scope,
             freq=os.environ.get("CAPIQ_FREQ", "Q"),
-            num_periods=int(os.environ.get("CAPIQ_NUM_PERIODS", "80")),
+            num_periods=_safe_int("CAPIQ_NUM_PERIODS", 80),
             retry=RetryConfig(
-                max_retries=int(os.environ.get("CAPIQ_MAX_RETRIES", "3")),
-                timeout_seconds=int(os.environ.get("CAPIQ_TIMEOUT", "240")),
-                restart_interval=int(os.environ.get("CAPIQ_RESTART_INTERVAL", "500")),
+                max_retries=_safe_int("CAPIQ_MAX_RETRIES", 3),
+                timeout_seconds=_safe_int("CAPIQ_TIMEOUT", 240),
+                restart_interval=_safe_int("CAPIQ_RESTART_INTERVAL", 500),
             ),
         )
 

@@ -29,7 +29,7 @@ def _data_in_a2(excel):
 
 def _get_cell_value_by_index(excel, x, y):
     try:
-        result = excel.ActiveSheet.Cells(1, 2).Value
+        result = excel.ActiveSheet.Cells(x, y).Value
         return result
     except AttributeError:
         raise WorkbookClosedException('Workbook was not open when trying to populate values.')

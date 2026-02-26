@@ -32,10 +32,13 @@ def extract_capiq_df_from_sheet(ws, market_data_items):
     return df
 
 
+_MAX_ROWS = 100_000
+
+
 def get_series_from_ciq_market_item_col(ws, col: str):
     series = pd.Series()
     row = 2
-    while True:
+    while row - 2 < _MAX_ROWS:
         cell_range = f'{col}{row}'
         value = ws.Range(cell_range).Value
         if value is None:
@@ -52,7 +55,7 @@ def get_series_from_ciq_market_item_col(ws, col: str):
 def get_series_from_ciq_financial_col(ws, col: str):
     series = pd.Series()
     row = 2
-    while True:
+    while row - 2 < _MAX_ROWS:
         cell_range = f'{col}{row}'
         value = ws.Range(cell_range).Value
         if value is None:

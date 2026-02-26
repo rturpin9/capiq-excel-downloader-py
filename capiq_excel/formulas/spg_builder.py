@@ -35,6 +35,8 @@ class SpgBuilder(DialectBuilder):
 
     def build_single_value(self, spec: QuerySpec) -> str:
         """=SPG(Identifier, Metric, Period, AsOfDate, Options)"""
+        if not spec.identifiers:
+            raise ValueError("QuerySpec.identifiers must not be empty")
         identifier = spec.identifiers[0]
         period = spec.period or _default_relative_period(spec.frequency)
         opts = spec.options.to_spg_options_string()
@@ -53,8 +55,9 @@ class SpgBuilder(DialectBuilder):
 
     def build_range(self, spec: QuerySpec) -> str:
         """=SPGRangeV(Identifier, Metric, BeginPeriod, EndPeriod, Options)"""
+        if not spec.identifiers:
+            raise ValueError("QuerySpec.identifiers must not be empty")
         identifier = spec.identifiers[0]
-        label = spec.label or spec.metric
         opts = spec.options.to_spg_options_string()
 
         begin = spec.begin_date or _begin_period_code(spec.frequency, spec.num_periods)
@@ -79,6 +82,8 @@ class SpgBuilder(DialectBuilder):
         metrics, and periods are typically cell references in real use.
         For formula generation, we emit the literal values.
         """
+        if not spec.identifiers:
+            raise ValueError("QuerySpec.identifiers must not be empty")
         identifier = spec.identifiers[0]
         period = spec.period or _default_relative_period(spec.frequency)
         opts = spec.options.to_spg_options_string()
@@ -100,13 +105,26 @@ class SpgBuilder(DialectBuilder):
 
 # --- period code helpers ---
 
+def _get_period_prefix(frequency: str) -> str:
+    """Return the SPG period prefix for a canonical frequency code.
+
+    Raises ValueError for unsupported frequencies.
+    """
+    prefix = _FREQ_TO_PERIOD_PREFIX.get(frequency)
+    if prefix is None:
+        raise ValueError(
+            f"SPG builder does not support frequency '{frequency}'. "
+            f"Supported: {', '.join(sorted(_FREQ_TO_PERIOD_PREFIX.keys()))}"
+        )
+    return prefix
+
+
 def _default_relative_period(frequency: str) -> str:
     """Return the 'latest' relative period code for a frequency.
 
     e.g. Q -> FQ0, Y -> FY0
     """
-    prefix = _FREQ_TO_PERIOD_PREFIX.get(frequency, "FQ")
-    return f"{prefix}0"
+    return f"{_get_period_prefix(frequency)}0"
 
 
 def _begin_period_code(frequency: str, num_periods: int) -> str:
@@ -115,8 +133,7 @@ def _begin_period_code(frequency: str, num_periods: int) -> str:
     e.g. frequency=Q, num_periods=80 -> "FQ-80"
          frequency=Y, num_periods=20 -> "FY-20"
     """
-    prefix = _FREQ_TO_PERIOD_PREFIX.get(frequency, "FQ")
-    return f"{prefix}-{num_periods}"
+    return f"{_get_period_prefix(frequency)}-{num_periods}"
 
 
 def _end_period_code(frequency: str) -> str:

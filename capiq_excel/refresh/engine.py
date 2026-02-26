@@ -200,7 +200,7 @@ def _check_readiness(excel) -> tuple[str, Optional[str]]:
                     elif cell_val is None or cell_val == 0 or cell_val == "":
                         has_unresolved_formula = True
             except Exception:
-                pass
+                logger.debug("Could not read formula status from cell(%d, %d)", row, col, exc_info=True)
 
             if val is None:
                 continue

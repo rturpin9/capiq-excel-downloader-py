@@ -85,6 +85,7 @@ def populate_capiq_for_file(filepath, excel, financial_data_items_dict: Dict[str
             market_data_items_dict,
             retries_remaining=retries_remaining - 1,
             close_workbook=True,
+            index=index,
             config=config,
         )
 

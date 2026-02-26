@@ -17,10 +17,13 @@ class CiqBuilder(DialectBuilder):
         return "ciq"
 
     def build_single_value(self, spec: QuerySpec) -> str:
-        label = spec.label or spec.metric
+        if not spec.identifiers:
+            raise ValueError("QuerySpec.identifiers must not be empty")
         return f'=CIQ("{spec.identifiers[0]}", "{spec.metric}")'
 
     def build_range(self, spec: QuerySpec) -> str:
+        if not spec.identifiers:
+            raise ValueError("QuerySpec.identifiers must not be empty")
         label = spec.label or spec.metric
 
         if spec.metric_type == "market":

@@ -146,6 +146,9 @@ def name_command(search_str):
     return f'=CIQRANGEA("{search_str}","IQ_COMPANY_NAME_QUICK_MATCH",1,1)'
 
 def _validate_financial_data_inputs(*args, **kwargs):
-    assert kwargs['freq'] in ('Q','Y')
-    assert isinstance(args[0], str)
-    assert isinstance(args[1], str)
+    if kwargs.get('freq') not in ('Q', 'Y'):
+        raise ValueError(f"freq must be 'Q' or 'Y', got {kwargs.get('freq')!r}")
+    if not isinstance(args[0], str):
+        raise TypeError(f"company_id must be str, got {type(args[0]).__name__}")
+    if not isinstance(args[1], str):
+        raise TypeError(f"data_item must be str, got {type(args[1]).__name__}")

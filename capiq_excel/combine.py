@@ -51,18 +51,24 @@ def _append_capiq_xlsx_to_csv(file, outpath, df_of_headers, all_columns):
 
     return df_of_headers, all_columns
 
+_PATTERN_ID_DATE = re.compile(r'(IQ\d+) ([\d-]+)([.]xlsx)')
+_PATTERN_ID_ONLY = re.compile(r'(IQ\d+)([.]xlsx)')
+
+
 def _filepath_has_date(filepath):
     filename = os.path.basename(filepath)  # strips folders, etc.
-    pattern = re.compile(r'(IQ\d+) ([\d-]+)([.]xlsx)')
-    return True if pattern.match(filename) else False
+    return bool(_PATTERN_ID_DATE.match(filename))
 
 def _capiq_filepath_to_iq_id(filepath):
-    filename = os.path.basename(filepath) #strips folders, etc.
-    pattern = re.compile(r'(IQ\d+)([.]xlsx)')
-    return pattern.match(filename).group(1)
+    filename = os.path.basename(filepath)  # strips folders, etc.
+    match = _PATTERN_ID_ONLY.match(filename)
+    if not match:
+        raise ValueError(f"Could not extract IQ ID from filename: {filename}")
+    return match.group(1)
 
 def _capiq_filepath_to_iq_id_and_date(filepath):
     filename = os.path.basename(filepath)  # strips folders, etc.
-    pattern = re.compile(r'(IQ\d+) ([\d-]+)([.]xlsx)')
-    match = pattern.match(filename)
+    match = _PATTERN_ID_DATE.match(filename)
+    if not match:
+        raise ValueError(f"Could not extract IQ ID and date from filename: {filename}")
     return match.group(1), match.group(2)
