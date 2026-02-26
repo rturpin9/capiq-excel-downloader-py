@@ -68,11 +68,43 @@ capiq_excel/
 | Feature | CIQ (Legacy) | SPG (Pro) | SNL (Pro) |
 |---|---|---|---|
 | Single value | `=CIQ(id, metric)` | `=SPG(id, metric, period, opts)` | `=SNLData(dataset, id, field, key)` |
-| Range | `=CIQRANGE(id, metric, period...)` | `=SPGRangeV(id, metric, begin, end, opts)` | `=SNLMarkets(id, field, key, start, end)` |
+| Range (formulas) | `=CIQRANGE(id, metric, period...)` | `=SPGRangeV(id, metric, begin, end, opts)` | `=SNLMarkets(id, field, key, start, end)` |
+| Range (values) | `=CIQRANGEV(id, metric, period...)` | | |
+| Range (across) | `=CIQRANGEA(id, metric, ...)` | | |
 | Table | _(none)_ | `=SPGTable(ids, metrics, periods, opts)` | `=SNLTable(dataset, ids, fields, keys, opts)` |
 | ID lookup | `=CIQ(search, "IQ_COMPANY_ID")` | `=SPG(search, field)` | `=SNLData(1, search, field)` |
-| Period syntax | `IQ_FQ - 80` (relative) | `FQ-80`, `FY2020`, `FQ12020` | `2013Q2`, `MRQ`, `[MRQ-1]` |
+| Period syntax | `IQ_FQ-80` (relative) | `FQ-80`, `FY2020`, `FQ12020` | `2013Q2`, `MRQ`, `[MRQ-1]` |
 | Options | positional args | `"Curr=USD,Mag=Millions"` | `"Curr=USD,Mag=Millions"` |
+
+### CIQ CIQRANGE Parameter Patterns (CRITICAL)
+
+**The parameter pattern differs by data category. Using the wrong one returns `(Invalid Time Period)` or `(Invalid Period Type)`.** Substitute `CIQRANGEV` for efficiency or `CIQRANGEA` for horizontal expansion.
+
+```
+# Market data (pricing, TEV, market cap): date range
+=CIQRANGE("DSGX", "IQ_CLOSEPRICE", "2/26/2025", "2/26/2026", , , , , , "Price")
+=CIQRANGE("DSGX", "IQ_TEV", "2/26/2025", "2/26/2026", , , , , , "TEV")
+
+# Financial data (income stmt, balance sheet, cash flow): period offset
+=CIQRANGE("DSGX", "IQ_EBITDA", IQ_FQ-16, , , , , , , "EBITDA")
+=CIQRANGE("DSGX", "IQ_TOTAL_REV", IQ_FY-5, , , , , , , "Revenue")
+
+# Financial dates (for date column alongside financial data):
+=CIQRANGE("DSGX", "IQ_PERIODDATE_BS", IQ_FQ-16, , , , , , , "Date")
+
+# Trading multiples: period TYPE + date range (relative or absolute)
+=CIQRANGEV("DSGX", "IQ_TEV_EBITDA", IQ_LTM, "-1Y", "2/26/2026", , , , "TEV/EBITDA")
+=CIQRANGEV("DSGX", "IQ_TEV_TOTAL_REV", IQ_LTM, "2/26/2023", "2/26/2026", , , , "TEV/Revenue")
+```
+
+**Period types for multiples:** `IQ_LTM`, `IQ_FY`, `IQ_CY`, `IQ_FQ`, `IQ_CQ`, `IQ_FH`, `IQ_CH`
+**Date formats:** Absolute `"M/D/YYYY"` or relative `"-1Y"`, `"-6M"`, `"-90D"`
+
+### Workbook Layout for CIQRANGE
+
+- **Formula goes in Row 1** of each column, data expands downward from Row 2
+- The `Label` parameter (last arg) becomes the column header text
+- Market data returns ~252 daily points/year; multiples ~198 daily points/year; financial data = N quarters/years
 
 ### Pro Refresh Commands (VBA via Application.Run)
 
@@ -140,8 +172,12 @@ capiq doctor          # Check environment health
 - All public functions accept optional `config: CapiqConfig` — omitting it preserves legacy behavior
 - `test_download.py` is an integration test requiring live Excel + CIQ plugin
 - **CRITICAL**: Excel must be launched via subprocess (not `Dispatch()`) for UDFs to register — use `exceldriver._start_excel_with_addins_and_attach()`
-- In Pro CIQ compat mode: `CIQ()` and `CIQRANGE()` work; `CIQRANGEA()` does NOT (returns function name as string)
+- In Pro CIQ compat mode: `CIQ()`, `CIQRANGE()`, and `CIQRANGEV()` work; `CIQRANGEA()` does NOT (returns function name as string)
 - CIQ builder uses `=CIQ(search,"IQ_COMPANY_ID")` for ID lookup (not CIQRANGEA)
 - CIQ compat registry: `DisableCIQUDF = 0` means CIQ is ENABLED (inverted logic)
 - SPG formulas require different metric names/ID formats than CIQ — not yet fully mapped
 - COM error `-2146826259` = `#NAME?` (UDF not registered); `-2146826273` = `#VALUE!`
+- **Pre-calculated multiples** (IQ_TEV_EBITDA, IQ_TEV_TOTAL_REV, etc.) require `IQ_LTM` period type + date range — financial period syntax (`IQ_FQ-N`) returns `(Invalid Time Period)`
+- `CIQ()` with period param works for current period only (`IQ_FQ-0`, `IQ_LTM`); historical periods (`IQ_FQ-1` etc.) return `(Invalid Period Type)` for multiples
+- `excel_lifecycle.py` provides `launch_excel_isolated()` / `close_session()` for safe non-destructive COM sessions
+- Working example scripts: `comp_table.py` (single-value CIQ), `ev_multiples_chart.py` (CIQRANGEV time series)

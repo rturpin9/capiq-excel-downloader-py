@@ -42,26 +42,65 @@ CIQ uses `EXCHANGE:TICKER` format. Plain tickers (no exchange prefix) also work 
 | Function | Syntax | Use Case |
 |----------|--------|----------|
 | `CIQ` | `=CIQ(T, Metric)` | Single value lookup |
-| `CIQRANGE` | `=CIQRANGE(T, Metric, Period/D1, D2, ...)` | Range/time-series data |
+| `CIQ` | `=CIQ(T, Metric, "IQ_FQ-N")` | Single value for specific period |
+| `CIQRANGE` | `=CIQRANGE(T, Metric, Period/D1, D2, ...)` | Range of formulas (each cell gets its own formula) |
+| `CIQRANGEV` | `=CIQRANGEV(T, Metric, Period/D1, D2, ...)` | Range of values (data fills as values, more efficient) |
+| `CIQRANGEA` | `=CIQRANGEA(T, Metric, ...)` | Range across (horizontal expansion) |
 | `CIQAVG` | `=CIQAVG(T, Metric, D1, D2)` | Average over date range |
 | `CIQHI` | `=CIQHI(T, Metric, D1, D2)` | High value over date range |
 | `CIQLO` | `=CIQLO(T, Metric, D1, D2)` | Low value over date range |
 | `CIQPC` | `=CIQPC(T, Metric, D1, D2)` | Percent change over period |
 | `CIQGETDATE` | `=CIQGETDATE(IQ_TODAY)` | Today's date |
 
+### CIQRANGE vs CIQRANGEV vs CIQRANGEA
+
+- **CIQRANGE** — range of formulas: each expanded cell contains its own CIQ formula
+- **CIQRANGEV** — range of values: data fills as plain values (more efficient, preferred for large pulls)
+- **CIQRANGEA** — range across: expands horizontally instead of vertically
+- All three accept the same parameter patterns (substitute `CIQRANGEV` or `CIQRANGEA` for `CIQRANGE`)
+- **CIQ compat mode (Pro):** `CIQRANGE` and `CIQRANGEV` work; `CIQRANGEA` does NOT (returns function name as string)
+
 ### CIQRANGE Syntax by Data Type
 
-| Data Type | Syntax |
-|-----------|--------|
-| Pricing | `=CIQRANGE(T, Market Item, D1, D2)` |
-| Financials | `=CIQRANGE(T, Financial Metric, Period, D2)` |
-| Multiples | `=CIQRANGE(T, Multiple Metric, Period, D1, D2)` |
-| Dividends | `=CIQRANGE(T, Dividend Metric, D1, D2)` |
-| News | `=CIQRANGE(T, IQ_NEWS, Start Rank, End Rank)` |
-| Key Dev | `=CIQRANGE(T, IQ_KEY_DEV_ID, D1, D2, Category)` |
-| Quick Comps | `=CIQRANGE(T, IQ_QUICK_COMP, Start Rank, End Rank)` |
+**CRITICAL: The parameter pattern varies by data type. Using the wrong pattern returns `(Invalid Time Period)` or `(Invalid Period Type)`.**
 
-*T = Ticker, D1 = Start Date, D2 = End Date*
+| Data Type | Syntax | Example |
+|-----------|--------|---------|
+| Pricing / Market | `=CIQRANGE(T, Metric, D1, D2, , , , , Label)` | `=CIQRANGE("DSGX","IQ_CLOSEPRICE","2/26/2025","2/26/2026",,,,,,"Price")` |
+| Financials | `=CIQRANGE(T, Metric, IQ_FQ-N, , , , , , Label)` | `=CIQRANGE("DSGX","IQ_EBITDA",IQ_FQ-16,,,,,,,"EBITDA")` |
+| **Trading Multiples** | `=CIQRANGEV(T, Metric, Period, D1, D2, , , , Label)` | `=CIQRANGEV("DSGX","IQ_TEV_EBITDA",IQ_LTM,"-1Y","2/26/2026",,,,"TEV/EBITDA")` |
+| Dividends | `=CIQRANGE(T, Metric, D1, D2)` | |
+| News | `=CIQRANGE(T, IQ_NEWS, Start Rank, End Rank)` | |
+| Key Dev | `=CIQRANGE(T, IQ_KEY_DEV_ID, D1, D2, Category)` | |
+| Quick Comps | `=CIQRANGE(T, IQ_QUICK_COMP, Start Rank, End Rank)` | |
+
+*T = Ticker, D1 = Start Date, D2 = End Date, N = number of periods*
+
+### Relative Period Types (for Multiples and Financials)
+
+| Period | Meaning | Example Use |
+|--------|---------|-------------|
+| `IQ_LTM` | Last Twelve Months | Trading multiples: `CIQRANGEV(T, "IQ_TEV_EBITDA", IQ_LTM, ...)` |
+| `IQ_FY` | Fiscal Year | Annual financial data |
+| `IQ_CY` | Calendar Year | Calendar-year aligned data |
+| `IQ_FQ` | Fiscal Quarter | Quarterly financial data: `CIQRANGE(T, "IQ_EBITDA", IQ_FQ-12, ...)` |
+| `IQ_CQ` | Calendar Quarter | Calendar-quarter aligned data |
+| `IQ_FH` | Fiscal Half | Semi-annual financial data |
+| `IQ_CH` | Calendar Half | Calendar half-year data |
+
+### Date Parameters
+
+- **Absolute dates:** `"2/26/2025"`, `"12/31/2024"` (M/D/YYYY format)
+- **Relative dates:** `"-1Y"` (1 year back), `"-6M"` (6 months), `"-90D"` (90 days)
+- **Relative period offsets:** `IQ_FQ-12` (12 fiscal quarters back), `IQ_FY-5` (5 fiscal years back)
+
+### Workbook Layout for CIQRANGE Expansion
+
+- **Formula goes in Row 1** of its column (not Row 2)
+- The `Label` parameter becomes the column header
+- Data expands downward starting from Row 2
+- For financial data, add a separate date column: `=CIQRANGE(T,"IQ_PERIODDATE_BS",IQ_FQ-N,,,,,,,"Date")`
+- Market data returns ~252 daily data points per year; multiples return ~198 daily data points per year
 
 ---
 
