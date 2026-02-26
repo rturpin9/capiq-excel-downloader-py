@@ -1,4 +1,4 @@
-from typing import Sequence, Dict, Iterable, Callable
+from typing import Sequence, Dict, Iterable, Callable, Optional
 import os
 import string
 import itertools
@@ -8,18 +8,26 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 
 from exceldriver.workbook.create import get_workbook_and_worksheet
 from exceldriver.columns import excel_cols
-from .commands import financial_data_command, id_command, name_command, holdings_command, market_data_command
+from .commands import (
+    financial_data_command, id_command, name_command, holdings_command, market_data_command,
+    make_financial_command, make_market_command, make_holdings_command, make_id_command, make_name_command,
+)
+
+from capiq_excel.formulas.base import DialectBuilder
 
 
 def create_all_xlsx_with_commands(folder: str, company_id_list: Sequence[str],
                                   financial_data_items_dict: Dict[str, str],
-                                  market_data_items_dict: Dict[str, str], **financials_kwargs):
+                                  market_data_items_dict: Dict[str, str],
+                                  builder: Optional[DialectBuilder] = None,
+                                  **financials_kwargs):
     [
         create_xlsx_with_commands(
             folder,
             company_id,
             financial_data_items_dict,
             market_data_items_dict,
+            builder=builder,
             **financials_kwargs
         )
         for company_id in company_id_list
@@ -27,9 +35,12 @@ def create_all_xlsx_with_commands(folder: str, company_id_list: Sequence[str],
 
 
 def create_xlsx_with_commands(folder: str, company_id: str, financial_data_items_dict: Dict[str, str],
-                              market_data_items_dict: Dict[str, str], **financials_kwargs):
+                              market_data_items_dict: Dict[str, str],
+                              builder: Optional[DialectBuilder] = None,
+                              **financials_kwargs):
     wb, ws = get_workbook_and_worksheet()
-    _fill_with_commands(ws, company_id, financial_data_items_dict, market_data_items_dict, **financials_kwargs)
+    _fill_with_commands(ws, company_id, financial_data_items_dict, market_data_items_dict,
+                        builder=builder, **financials_kwargs)
 
     if not os.path.exists(folder):
         os.makedirs(folder)
@@ -39,23 +50,26 @@ def create_xlsx_with_commands(folder: str, company_id: str, financial_data_items
 
     return os.path.abspath(filepath)
 
-def create_all_xlsx_with_holdings_commands(folder, company_id_list, date_str_list, data_items_dict):
+def create_all_xlsx_with_holdings_commands(folder, company_id_list, date_str_list, data_items_dict,
+                                           builder: Optional[DialectBuilder] = None):
     [
-        create_xlsx_with_holdings_commands(folder, company_id, date_str, data_items_dict)
+        create_xlsx_with_holdings_commands(folder, company_id, date_str, data_items_dict, builder=builder)
         for company_id, date_str in itertools.product(company_id_list, date_str_list)
     ]
 
 
-def create_xlsx_with_holdings_commands(folder, company_id, date_str, data_items_dict):
+def create_xlsx_with_holdings_commands(folder, company_id, date_str, data_items_dict,
+                                       builder: Optional[DialectBuilder] = None):
     wb, ws = get_workbook_and_worksheet()
-    _fill_with_holdings_commands(ws, company_id, date_str, data_items_dict)
+    _fill_with_holdings_commands(ws, company_id, date_str, data_items_dict, builder=builder)
 
     filepath = os.path.join(folder, f'{company_id} {_date_str_to_file_format(date_str)}.xlsx')
     wb.save(filepath)
 
     return os.path.abspath(filepath)
 
-def create_all_xlsx_with_id_commands(ids: Sequence[str], folder, num_files=100):
+def create_all_xlsx_with_id_commands(ids: Sequence[str], folder, num_files=100,
+                                     builder: Optional[DialectBuilder] = None):
     wb, ws = get_workbook_and_worksheet()
 
     if not os.path.exists(folder):
@@ -63,8 +77,8 @@ def create_all_xlsx_with_id_commands(ids: Sequence[str], folder, num_files=100):
 
     df = pd.DataFrame()
     _fill_id_column(df, ids)
-    _fill_capiq_id_column(df)
-    _fill_capiq_name_column(df)
+    _fill_capiq_id_column(df, builder=builder)
+    _fill_capiq_name_column(df, builder=builder)
 
     rows_per_ws = math.ceil(len(df)/num_files) + 1  # one additional row for headers
 
@@ -96,30 +110,49 @@ def _fill_id_column(df: pd.DataFrame, ids: Sequence[str]):
     """
     df['ID'] = ids
 
-def _fill_capiq_id_column(df):
+def _fill_capiq_id_column(df, builder: Optional[DialectBuilder] = None):
     """
     NOTE: inplace
     """
-    df['Blank 1'] = df['ID'].apply(id_command)
+    id_cmd = make_id_command(builder) if builder is not None else id_command
 
-    # Blank needed because ids will populate to the right by one column
-    df['IQID'] = ''
+    if builder is not None:
+        # Builder-based: CIQ() returns value in-cell (no right-expansion)
+        df['IQID'] = df['ID'].apply(id_cmd)
+    else:
+        # Legacy: CIQRANGEA expands one column to the right
+        df['Blank 1'] = df['ID'].apply(id_cmd)
+        df['IQID'] = ''
 
 
-def _fill_capiq_name_column(df):
+def _fill_capiq_name_column(df, builder: Optional[DialectBuilder] = None):
     """
     NOTE: inplace
     """
-    df['Blank 2'] = df['ID'].apply(name_command)
+    name_cmd = make_name_command(builder) if builder is not None else name_command
 
-    # Blank needed because ids will populate to the right by one column
-    df['IQ Name'] = ''
+    if builder is not None:
+        # Builder-based: CIQ() returns value in-cell (no right-expansion)
+        df['IQ Name'] = df['ID'].apply(name_cmd)
+    else:
+        # Legacy: CIQRANGEA expands one column to the right
+        df['Blank 2'] = df['ID'].apply(name_cmd)
+        df['IQ Name'] = ''
 
 def _fill_with_commands(ws, company_id: str, financial_data_items_dict: Dict[str, str],
-                        market_data_items_dict: Dict[str, str], **financials_kwargs):
+                        market_data_items_dict: Dict[str, str],
+                        builder: Optional[DialectBuilder] = None,
+                        **financials_kwargs):
     """
     Note: inplace
     """
+    # Resolve command functions: builder-aware when available, legacy otherwise
+    if builder is not None:
+        fin_cmd = make_financial_command(builder)
+        mkt_cmd = make_market_command(builder)
+    else:
+        fin_cmd = financial_data_command
+        mkt_cmd = market_data_command
 
     # Set default freq
     try:
@@ -137,9 +170,9 @@ def _fill_with_commands(ws, company_id: str, financial_data_items_dict: Dict[str
         company_id
     )
 
-    _fill_ws_by_data_item_dict(date_dict, financial_data_command, *common_args, **financials_kwargs)
-    _fill_ws_by_data_item_dict(financial_data_items_dict, financial_data_command, *common_args, **financials_kwargs)
-    _fill_ws_by_data_item_dict(market_data_items_dict, market_data_command, *common_args, **financials_kwargs)
+    _fill_ws_by_data_item_dict(date_dict, fin_cmd, *common_args, **financials_kwargs)
+    _fill_ws_by_data_item_dict(financial_data_items_dict, fin_cmd, *common_args, **financials_kwargs)
+    _fill_ws_by_data_item_dict(market_data_items_dict, mkt_cmd, *common_args, **financials_kwargs)
 
 
 
@@ -156,12 +189,14 @@ def _fill_ws_by_data_item_dict(data_items_dict: Dict[str, str], command_func: Ca
         )
 
 
-def _fill_with_holdings_commands(ws, company_id, date_str, data_items_dict):
+def _fill_with_holdings_commands(ws, company_id, date_str, data_items_dict,
+                                  builder: Optional[DialectBuilder] = None):
+    hold_cmd = make_holdings_command(builder) if builder is not None else holdings_command
     column_generator = excel_cols()
 
     for item in data_items_dict:
         current_column = next(column_generator)
-        ws[f'{current_column}1'] = holdings_command(
+        ws[f'{current_column}1'] = hold_cmd(
             company_id, item, date_str,
             data_item_label=data_items_dict[item]
         )
@@ -185,5 +220,3 @@ def _get_date_var_dict_from_freq(freq) -> Dict[str, str]:
 
 def _date_str_to_file_format(date_str):
     return date_str.replace('/','-')
-
-

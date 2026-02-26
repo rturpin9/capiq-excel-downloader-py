@@ -1,6 +1,88 @@
+"""
+Excel formula command generators.
+
+Legacy CIQ-only functions are preserved at the bottom for backward compatibility.
+New code should use the builder-aware factory functions (make_*_command).
+"""
+from __future__ import annotations
+
 from typing import Optional
+
+from capiq_excel.formulas.base import DialectBuilder, QuerySpec
 from capiq_excel.tools.dates import freq_and_periods_to_begin_date_str, today_as_str
 
+
+# ---------------------------------------------------------------------------
+# Builder-aware command factories
+#
+# Each factory returns a callable with the same signature as the legacy
+# function it replaces, so they can be used interchangeably by create.py.
+# ---------------------------------------------------------------------------
+
+def make_financial_command(builder: DialectBuilder):
+    """Return a financial-data command function bound to *builder*."""
+    def command(company_id: str, data_item: str, freq: str = 'Q', num_periods: int = 80,
+                data_item_label: Optional[str] = None) -> str:
+        spec = QuerySpec(
+            identifiers=[company_id],
+            metric=data_item,
+            metric_type="financial",
+            frequency=freq,
+            num_periods=num_periods,
+            label=data_item_label,
+        )
+        return builder.build_range(spec)
+    return command
+
+
+def make_market_command(builder: DialectBuilder):
+    """Return a market-data command function bound to *builder*."""
+    def command(company_id: str, data_item: str, freq: str = 'Q', num_periods: int = 80,
+                data_item_label: Optional[str] = None) -> str:
+        spec = QuerySpec(
+            identifiers=[company_id],
+            metric=data_item,
+            metric_type="market",
+            frequency=freq,
+            num_periods=num_periods,
+            label=data_item_label,
+        )
+        return builder.build_range(spec)
+    return command
+
+
+def make_holdings_command(builder: DialectBuilder):
+    """Return a holdings command function bound to *builder*."""
+    def command(company_id: str, data_item: str, date_str: str,
+                data_item_label: Optional[str] = None) -> str:
+        spec = QuerySpec(
+            identifiers=[company_id],
+            metric=data_item,
+            metric_type="ownership",
+            begin_date=date_str,
+            label=data_item_label,
+        )
+        return builder.build_range(spec)
+    return command
+
+
+def make_id_command(builder: DialectBuilder):
+    """Return an ID-lookup command function bound to *builder*."""
+    def command(search_str: str) -> str:
+        return builder.build_identifier_lookup(search_str, "IQ_COMPANY_ID_QUICK_MATCH")
+    return command
+
+
+def make_name_command(builder: DialectBuilder):
+    """Return a name-lookup command function bound to *builder*."""
+    def command(search_str: str) -> str:
+        return builder.build_identifier_lookup(search_str, "IQ_COMPANY_NAME_QUICK_MATCH")
+    return command
+
+
+# ---------------------------------------------------------------------------
+# Legacy CIQ-only functions (backward compatibility)
+# ---------------------------------------------------------------------------
 
 def financial_data_command(company_id: str, data_item: str, freq: str='Q', num_periods: int=80,
                            data_item_label: Optional[str]=None) -> str:

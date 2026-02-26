@@ -10,7 +10,11 @@ def freq_and_periods_to_begin_date_str(freq: str, periods: int) -> str:
 
 
 def _freq_and_periods_to_begin_date(freq: str, periods: int) -> pd.Timestamp:
-    all_dates = pd.date_range(end=datetime.datetime.today(), periods=periods, freq=freq)
+    # Map legacy CIQ frequency codes to pandas offset aliases.
+    # Pandas 3.x removed bare 'Q' and 'Y'; they are now 'QE' and 'YE'.
+    _FREQ_MAP = {"Q": "QE", "Y": "YE"}
+    pd_freq = _FREQ_MAP.get(freq, freq)
+    all_dates = pd.date_range(end=datetime.datetime.today(), periods=periods, freq=pd_freq)
     return all_dates[0]
 
 

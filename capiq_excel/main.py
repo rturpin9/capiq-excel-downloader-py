@@ -1,9 +1,44 @@
 from typing import List, Dict, Union, Sequence, Optional
+import copy
 import os
 from capiq_excel.workbook.create import create_all_xlsx_with_commands
 from capiq_excel.downloader.tools import populate_all_files_in_folder
 from capiq_excel.ids import download_capiq_ids, _get_ids_from_csv_path
 from capiq_excel.combine import combine_all_capiq_xlsx
+from capiq_excel.config import CapiqConfig, FormulaDialect
+from capiq_excel.formulas import get_builder
+
+
+def _resolve_config_dialect(config: CapiqConfig) -> CapiqConfig:
+    """Resolve AUTO dialect by starting Excel and detecting the runtime.
+
+    Returns a copy of the config with the dialect set to a concrete value
+    (CIQ or SPG), so all downstream code uses the same resolved dialect.
+    """
+    if config.formula_dialect != FormulaDialect.AUTO:
+        return config
+
+    ciq_compat = True  # safe default
+    try:
+        import time
+        from capiq_excel.runtime.addin_detection import detect_runtime
+        from exceldriver.tools import _start_excel_with_addins_and_attach
+        print('Detecting runtime environment...')
+        excel = _start_excel_with_addins_and_attach()
+        time.sleep(3)  # give add-ins time to load
+        profile = detect_runtime(excel)
+        ciq_compat = profile.ciq_compat_enabled if profile.ciq_compat_enabled is not None else True
+        print(f'  Pro installed: {profile.pro_installed}, CIQ compat: {ciq_compat}')
+        print(f'  Available dialects: {profile.available_dialects or "(none)"}')
+        print(f'  Add-in mode: {profile.addin_mode}')
+        excel.Quit()
+    except Exception as e:
+        print(f'  Runtime detection failed ({e}), defaulting to CIQ')
+
+    resolved = copy.copy(config)
+    resolved.formula_dialect = config.resolve_dialect(ciq_compat_available=ciq_compat)
+    print(f'Resolved formula dialect: {resolved.formula_dialect.value}')
+    return resolved
 
 
 def download_data(company_ids: List[str], financial_data_items: Optional[Union[Dict[str, str], Sequence[str]]] = None,
@@ -11,6 +46,7 @@ def download_data(company_ids: List[str], financial_data_items: Optional[Union[D
                   ids_folder: str = 'in_process_ids', data_folder: str = 'in_process_data',
                   data_outpath: str = 'capiq data.csv', ids_outpath: str = 'capiq ids.csv',
                   restart: bool = True, timeout: int = 240, run_failed: bool = False,
+                  config: Optional[CapiqConfig] = None,
                   **financial_command_kwargs):
     """
     Downloads data from Capital IQ given arbitrary ids such as name, ticker, CUSIP, ISIN, etc.
@@ -30,15 +66,21 @@ def download_data(company_ids: List[str], financial_data_items: Optional[Union[D
     :param timeout: Time to wait for file to be populated before considering it failed
     :param run_failed: Should only be set to True on a second or later run. Will target the failed files instead
         of the main files if True is passed.
+    :param config: Optional CapiqConfig for dialect selection, refresh mode, and retry settings.
+        If not provided, defaults to legacy CIQ behavior.
     :param financial_command_kwargs: kwargs for :py:func:`.financial_data_command`
     :return:
     """
+    # Early detection: resolve AUTO dialect once for the entire pipeline
+    if config is not None:
+        config = _resolve_config_dialect(config)
 
     if restart or not os.path.exists(ids_outpath):
         capiq_ids = download_capiq_ids(
             company_ids,
             outpath=ids_outpath,
-            folder=ids_folder
+            folder=ids_folder,
+            config=config,
         )
     else:
         capiq_ids = _get_ids_from_csv_path(ids_outpath)
@@ -52,6 +94,7 @@ def download_data(company_ids: List[str], financial_data_items: Optional[Union[D
         restart=restart,
         timeout=timeout,
         run_failed=run_failed,
+        config=config,
         **financial_command_kwargs
     )
 
@@ -62,6 +105,7 @@ def download_data_for_capiq_ids(capiq_company_ids: List[str],
                                 folder: str = 'in_process_data',
                                 outpath: str = 'capiq data.csv',
                                 restart: bool = True, timeout: int = 240, run_failed: bool = False,
+                                config: Optional[CapiqConfig] = None,
                                 **financial_command_kwargs):
     """
     Downloads data from Capital IQ given the capital IQ ids and chosen variables
@@ -79,10 +123,23 @@ def download_data_for_capiq_ids(capiq_company_ids: List[str],
     :param timeout: Time to wait for file to be populated before considering it failed
     :param run_failed: Should only be set to True on a second or later run. Will target the failed files instead
         of the main files if True is passed.
+    :param config: Optional CapiqConfig for dialect selection, refresh mode, and retry settings.
+        If not provided, defaults to legacy CIQ behavior.
     :param financial_command_kwargs: kwargs for :py:func:`.financial_data_command`
     :return:
     """
     financial_data_items, market_data_items = _get_data_items_dicts(financial_data_items, market_data_items)
+
+    # Resolve the formula dialect and create the builder.
+    # If called from download_data, dialect is already resolved (not AUTO).
+    # If called directly, do early detection if needed.
+    builder = None
+    if config is not None:
+        if config.formula_dialect == FormulaDialect.AUTO:
+            config = _resolve_config_dialect(config)
+        dialect = config.formula_dialect
+        print(f'Using formula dialect: {dialect.value}')
+        builder = get_builder(dialect)
 
     if restart or not os.path.exists(folder):
         print('Creating XLSX files with commands')
@@ -91,6 +148,7 @@ def download_data_for_capiq_ids(capiq_company_ids: List[str],
             company_id_list=capiq_company_ids,
             financial_data_items_dict=financial_data_items,
             market_data_items_dict=market_data_items,
+            builder=builder,
             **financial_command_kwargs
         )
 
@@ -102,6 +160,7 @@ def download_data_for_capiq_ids(capiq_company_ids: List[str],
         restart=restart,
         timeout=timeout,
         run_failed=run_failed,
+        config=config,
     )
 
     print('Combining individual XLSX files into a single CSV file')

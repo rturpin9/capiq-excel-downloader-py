@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "capiq-excel"
+version = "0.5.0-beta.1"
+description = "Capital IQ Data Downloader using Python to drive Excel Plugin (Legacy + Pro)"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "Nick DeRobertis", email = "whoopnip@gmail.com" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: Microsoft :: Windows",
+    "Topic :: Office/Business :: Financial",
+]
+dependencies = [
+    "exceldriver",
+    "processfiles",
+    "pypiwin32",
+    "openpyxl",
+    "pandas>=1.5",
+    "xlrd",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+]
+
+[project.urls]
+Code = "https://github.com/nickderobertis/capiq-excel-downloader-py/"
+Documentation = "https://nickderobertis.github.io/capiq-excel-downloader-py/"
+
+[project.scripts]
+capiq = "capiq_excel.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["capiq_excel*"]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]

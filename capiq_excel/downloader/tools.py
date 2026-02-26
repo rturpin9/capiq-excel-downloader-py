@@ -13,13 +13,25 @@ from processfiles.files import FileProcessTracker
 
 def populate_all_files_in_folder(folder, financial_data_items_dict: Dict[str, str],
                                  market_data_items_dict: Dict[str, str], restart=True, timeout=240,
-                                 run_failed=False,):
+                                 run_failed=False, config=None):
     """
+    Populate all XLSX files in a folder by opening them in Excel and letting
+    the Capital IQ plugin evaluate the formulas.
 
+    When *config* is provided, uses the new refresh engine and runtime detection.
     """
     _validate_populate_inputs(folder, restart, run_failed)
 
     excel = _start_excel_with_addins_and_attach()
+
+    # When config is available, detect runtime and load the right add-in
+    if config is not None:
+        from capiq_excel.addin import load_capiq_addin
+        try:
+            profile, addin_name = load_capiq_addin(excel, config)
+        except Exception as e:
+            print(f'Warning: Could not detect/load add-in ({e}), falling back to default behavior')
+
     failed_folder = get_path_of_failed_folder_add_if_necessary(folder)
 
     if run_failed:
@@ -28,6 +40,10 @@ def populate_all_files_in_folder(folder, financial_data_items_dict: Dict[str, st
         failed_folder = get_path_of_additional_failed_folder_add_if_necessary(folder)
 
     file_tracker = FileProcessTracker(folder=folder, restart=restart, file_types=('xlsx',))
+
+    effective_timeout = timeout
+    if config is not None:
+        effective_timeout = config.retry.timeout_seconds
 
     with ThreadPoolExecutor(max_workers=1) as e:
         for i, file in enumerate(file_tracker.file_generator()):
@@ -38,7 +54,9 @@ def populate_all_files_in_folder(folder, financial_data_items_dict: Dict[str, st
                 file,
                 excel,
                 financial_data_items_dict=financial_data_items_dict,
-                market_data_items_dict=market_data_items_dict
+                market_data_items_dict=market_data_items_dict,
+                config=config,
+                timeout=effective_timeout,
             )
 
             if not successful:
@@ -60,7 +78,8 @@ def _validate_populate_inputs(folder, restart, run_failed):
 
 ### Functions below to assist with multiprocessing/timeout handling
 
-def _try_to_get_result_if_fail_restart_excel(threadpool, i, file, excel, tries_remaining=3, **kwargs):
+def _try_to_get_result_if_fail_restart_excel(threadpool, i, file, excel, tries_remaining=3,
+                                              timeout=300, **kwargs):
 
     if tries_remaining <= 0:
         print(fr'ERROR: Timed out processing {file}. Skipping and moving to "..\failed".')
@@ -69,12 +88,14 @@ def _try_to_get_result_if_fail_restart_excel(threadpool, i, file, excel, tries_r
     # Submit result on threadpool asynchronously
     async_result = threadpool.submit(populate_capiq_for_file, file, excel, index=i + 1, **kwargs)
 
-    # Try to get the result, waiting up to two minutes.
+    # Try to get the result, waiting up to timeout seconds.
     try:
-        excel, successful = async_result.result(timeout=300)
+        excel, successful = async_result.result(timeout=timeout)
     except TimeoutError:
         excel = _restart_excel_with_addins_and_attach()
-        return _try_to_get_result_if_fail_restart_excel(threadpool, i, file, excel, tries_remaining=tries_remaining - 1)
+        return _try_to_get_result_if_fail_restart_excel(threadpool, i, file, excel,
+                                                         tries_remaining=tries_remaining - 1,
+                                                         timeout=timeout, **kwargs)
 
 
     return excel, successful
@@ -87,5 +108,3 @@ def _restart_excel_and_return_false():
 
 def _return_false():
     return False
-
-## END TEMP

@@ -2,124 +2,146 @@
 
 ## Project Overview
 
-Python tool that drives Microsoft Excel via COM automation to download data from S&P Capital IQ using the CIQ Excel plugin. Currently being modernized to support **Capital IQ Pro** (SPG/SNL formula families) alongside the legacy CIQ plugin.
+Python tool that drives Microsoft Excel via COM automation to download data from S&P Capital IQ using the CIQ Excel plugin. **Modernized** to support **Capital IQ Pro** (SPG/SNL formula families) alongside the legacy CIQ plugin.
 
 **Modernization plan:** `C:\Users\rturpin\Downloads\capiq-pro-compatibility-modernization-plan.md`
+**Pro plugin docs:** `C:\Claude\Pro_plugin_documentation\` (Tech Guide + User Guide PDFs)
 
 ## Architecture
 
-### Current Package Structure
+### Package Structure
 
 ```
 capiq_excel/
-  __init__.py          # Public API: download_data, download_data_for_capiq_ids
+  __init__.py          # Public API: download_data, download_data_for_capiq_ids,
+                       #   CapiqConfig, FormulaDialect, AddinMode, get_builder, QuerySpec
   main.py              # Orchestrator: create XLSX -> populate via Excel COM -> combine to CSV
-  addin.py             # Loads legacy "S&P Capital IQ Excel Plug-in" (hardcoded name)
-  exceptions.py        # WorkbookClosedException, CapitalIQInactiveException
-  ids.py               # ID resolution: arbitrary IDs -> CIQ IDs via CIQRANGEA
+                       #   Accepts optional CapiqConfig for dialect/mode selection
+  addin.py             # load_capiq(legacy) + load_capiq_addin(detect runtime, load best)
+  config.py            # CapiqConfig, FormulaDialect/AddinMode/RefreshScope enums,
+                       #   FormulaOptions with to_spg_options_string()
+  cli.py               # CLI entry: capiq status|detect-addins|download|doctor
+  exceptions.py        # Exception classes (legacy + new taxonomy)
+  ids.py               # ID resolution: arbitrary IDs -> CIQ IDs (builder-aware)
   fileops.py           # Failed-file management (move to failed folder)
   combine.py           # Combine per-company XLSX results into single CSV
+  runtime/
+    addin_detection.py # RuntimeProfile, detect_runtime(), load_best_addin(),
+                       #   registry checks (SNL Office keys, CIQ compat toggle)
+  formulas/
+    __init__.py        # get_builder(dialect) factory
+    base.py            # QuerySpec (canonical query), DialectBuilder ABC
+    ciq_builder.py     # CiqBuilder: CIQ(), CIQRANGE() (ID lookup via CIQ)
+    spg_builder.py     # SpgBuilder: SPG(), SPGRangeV(), SPGTable()
+    snl_builder.py     # SnlBuilder: SNLData(), SNLMarkets(), SNLTable(),
+                       #   SNLQuery(), SNLDefinition(), SNLConvert()
+  refresh/
+    engine.py          # refresh_and_wait() with VBA Application.Run for Pro,
+                       #   expanded error/pending token detection
   workbook/
-    commands.py        # Formula generators: CIQRANGE, CIQRANGEA (legacy CIQ only)
-    create.py          # Create XLSX workbooks pre-filled with CIQ formulas
-    wait.py            # Poll Excel for CIQ result readiness (cell A2 heuristic)
+    commands.py        # Builder-aware factories (make_*_command) + legacy CIQ functions
+    create.py          # Create XLSX workbooks (accepts optional DialectBuilder)
+    wait.py            # Legacy cell-A2 polling (used when no config provided)
     populate/
-      main.py          # Open XLSX in Excel, wait for CIQ refresh, save results
-      extract.py       # Extract data from CIQ formula cells (financial + market)
+      main.py          # Open XLSX in Excel, refresh (legacy or Pro), save results
+      extract.py       # Extract data from formula cells (financial + market)
       replace.py       # Write aligned DataFrame back to worksheet
   downloader/
     tools.py           # Batch file processing with retry/timeout/Excel restart
+                       #   (threads config through for Pro-aware detection)
     timeout.py         # ThreadPool-based timeout wrapper
   tools/
-    dates.py           # Date helpers for CIQ formula period calculation
+    dates.py           # Date helpers (pandas freq compat: Q->QE, Y->YE)
     ext_pandas.py      # CSV append utilities, date parsing, DataFrame helpers
 ```
 
-### External Dependencies (COM/Windows)
-
-- `exceldriver` - Excel COM automation (start/attach/restart Excel, add-in loading, workbook creation, column utilities)
-- `processfiles` - File tracking for batch processing (`FileProcessTracker`)
-- `pypiwin32` / `pythoncom` / `win32com` - Windows COM interop
-- `openpyxl` - XLSX creation (offline, before Excel opens them)
-- `pandas` - Data manipulation and CSV I/O
-- `xlrd` - Legacy Excel reading
-
 ### Data Flow
 
-1. **Create phase** (`workbook/create.py`): Generate XLSX files with CIQ formulas in cells (one per company)
-2. **Populate phase** (`downloader/tools.py` -> `workbook/populate/main.py`): Open each XLSX in Excel via COM, CIQ plugin evaluates formulas, wait for results, save
-3. **Combine phase** (`combine.py`): Read all populated XLSX files, merge into single CSV output
+1. **Config** (`CapiqConfig.from_env()` or explicit) -> resolve dialect
+2. **Build formulas** (`get_builder(dialect)` -> `make_*_command(builder)`)
+3. **Create XLSX** (`create.py` fills cells with dialect-appropriate formulas)
+4. **Populate** (Open in Excel via COM -> plugin evaluates -> refresh engine waits)
+5. **Combine** (Extract results into CSV)
 
-### Key Patterns
+### Formula Dialect Differences
 
-- COM operations require `pythoncom.CoInitialize()` per thread
-- Excel is restarted every 500 workbooks to work around memory leaks
-- Failed files are moved to a `failed/` subfolder for retry
-- Market data items produce unaligned date axes (each cell has its own date in the formula); extraction realigns them via `extract.py`
+| Feature | CIQ (Legacy) | SPG (Pro) | SNL (Pro) |
+|---|---|---|---|
+| Single value | `=CIQ(id, metric)` | `=SPG(id, metric, period, opts)` | `=SNLData(dataset, id, field, key)` |
+| Range | `=CIQRANGE(id, metric, period...)` | `=SPGRangeV(id, metric, begin, end, opts)` | `=SNLMarkets(id, field, key, start, end)` |
+| Table | _(none)_ | `=SPGTable(ids, metrics, periods, opts)` | `=SNLTable(dataset, ids, fields, keys, opts)` |
+| ID lookup | `=CIQ(search, "IQ_COMPANY_ID")` | `=SPG(search, field)` | `=SNLData(1, search, field)` |
+| Period syntax | `IQ_FQ - 80` (relative) | `FQ-80`, `FY2020`, `FQ12020` | `2013Q2`, `MRQ`, `[MRQ-1]` |
+| Options | positional args | `"Curr=USD,Mag=Millions"` | `"Curr=USD,Mag=Millions"` |
 
-## Modernization Target (Phased)
+### Pro Refresh Commands (VBA via Application.Run)
 
-### Phase 0: Branching + Feature Flags
-- Feature flags: `formula_dialect` (auto|ciq|spg), `addin_mode` (auto|legacy|pro), `refresh_scope`
-- Existing behavior preserved under `ciq/legacy` defaults
+- Selected cells: `SNLxlAddin.xla!RefreshActiveCells`
+- Entire sheet: `SNLxlAddin.xla!RefreshSheet`
+- All sheets: `SNLxlAddin.xla!RefreshWorkbook`
 
-### Phase 1: Add-In Discovery + Compatibility Layer
-- New: `capiq_excel/runtime/addin_detection.py` - detect legacy vs Pro add-ins
-- Replace hardcoded `load_capiq()` with `load_best_addin()` with fallback
-- Startup diagnostics (Excel version, add-in profile, selected mode)
+### In-Cell Status Tokens
 
-### Phase 2: Formula Dialect Abstraction
-- New: `capiq_excel/formulas/{base,ciq_builder,spg_builder}.py`
-- `QuerySpec` canonical input -> dialect-specific formula output
-- CIQ builder: `CIQ()`, `CIQRANGE()`, `CIQRANGEA()`
-- SPG builder: `SPG()`, `SPGRangeV()`, `SPGTable()`, `SNL*()`
+- **Pending:** `#REFRESH`, `#PEND`
+- **Hard errors:** `#ERROR`, `#INVALID COMPANY ID`, `#INVALID METRIC NAME`, `#INVALID FUNCTION PARAMETER`, `#OUTSIDE SUBSCRIPTION`, `KEYERROR`, `DEFUNCT`, `InvalidCurrency`, `InvalidMagnitude`, `InvalidConvMethod`, `#NAME`
+- **Legacy errors:** `ciqinactive`, `refresh`
 
-### Phase 3: Refresh Engine
-- New: `capiq_excel/refresh/engine.py`
-- Replace cell-A2 heuristic with strategy-based completion checks
-- Batch sequencing, throttling, dependency-aware refresh
+### Registry Keys (Pro)
 
-### Phase 4: Config + Settings
-- New: `capiq_excel/config.py` - dataclass/pydantic config model
-- Registry/env integration for Windows settings
-- CLI commands: `capiq status`, `capiq detect-addins`, `capiq download`, `capiq doctor`
+- Settings: `HKCU\Software\SNL Financial\SNL Office`
+- Load: `HKCU\Software\Microsoft\Office\Excel\Addins\SNL.Clients.Office.Excel.ExcelAddIn\LoadBehavior`
+- CIQ compat toggle: under SNL Office key (v21.08+)
+- Logs: `%LocalAppData%\SPGMI`
 
-### Phase 5: Reliability + Observability
-- Structured logging with run/file IDs
-- Error taxonomy: `AddinNotFoundError`, `DialectUnsupportedError`, `AuthSessionError`, `RefreshTimeoutError`, `FormulaValidationError`
-- Diagnostics bundle export
+## External Dependencies
 
-### Phase 6: Packaging
-- Migrate to `pyproject.toml`
-- Pin Windows COM dependencies
-- CI: unit tests in CI, integration tests gated on Windows+Excel
+- `exceldriver` - Excel COM automation
+- `processfiles` - Batch file tracking
+- `pypiwin32` / `pythoncom` / `win32com` - Windows COM interop
+- `openpyxl` - XLSX creation
+- `pandas` - Data manipulation
+- `xlrd` - Legacy Excel reading
 
 ## Conventions
 
-- Python 3.10+ target (modernization)
+- Python 3.10+ target
 - Type hints on all new code
-- Dataclasses for config and data structures (pydantic optional)
-- `pytest` for testing
-- Formula output must be snapshot-testable (string comparison)
+- Dataclasses for config and data structures
+- `pytest` for testing; formula output is snapshot-testable (string comparison)
 - All COM interaction behind abstraction layers
-- Feature flags control dialect/mode selection; defaults preserve legacy behavior
-- New modules go under clear subdirectories: `runtime/`, `formulas/`, `refresh/`
+- Feature flags control dialect/mode; defaults preserve legacy behavior
+- Builder-aware command factories (`make_*_command(builder)`) alongside legacy functions
 
 ## Commands
 
 ```bash
-# Run tests (requires Windows + Excel + CIQ plugin for integration tests)
-pytest test/
+# Run unit tests (no Excel/COM required)
+python -m pytest test/test_config.py test/test_formulas.py test/test_smoke.py -v
 
-# Install in development mode
-pip install -e .
+# Run all tests (requires Windows + Excel + CIQ plugin for integration)
+python -m pytest test/ -v
+
+# CLI
+capiq status          # Show config from env vars
+capiq detect-addins   # Start Excel, detect installed add-ins
+capiq download --ids MSFT AAPL --financial-items IQ_TOTAL_REV --dialect spg
+capiq doctor          # Check environment health
 ```
 
-## Important Notes
+## Key Notes
 
-- This is a Windows-only tool (COM automation with Excel)
-- The legacy CIQ add-in name is exactly: `S&P Capital IQ Excel Plug-in`
-- CIQ formulas: `CIQ()`, `CIQRANGE()`, `CIQRANGEA()` - use relative periods like `IQ_FQ - 80`
-- Market data formulas use absolute date strings instead of relative periods
-- The `exceldriver` package provides: `load_addin()`, `_start_excel_with_addins_and_attach()`, `_restart_excel_with_addins_and_attach()`, `get_workbook_and_worksheet()`, `excel_cols()`
-- `processfiles.FileProcessTracker` manages which files have been processed in a batch
+- Windows-only tool (COM automation with Excel)
+- Legacy CIQ add-in name: `S&P Capital IQ Excel Plug-in`
+- Pro add-in ProgID: `SNL.Clients.Office.Excel.ExcelAddIn` (display name: `S&P Cap IQ Pro Excel Add-In`)
+- Pro UDF/refresh XLA: `SNLxlAddin.xla` (installed at `%ProgramFiles(x86)%\SNL Financial\SNLxl`)
+- CIQ compat in Pro: toggleable at install and post-install (Settings UI)
+- When CIQ compat is enabled, Pro handles CIQ formula refresh — separate CIQ add-in not needed
+- `tools/dates.py` maps `Q->QE`, `Y->YE` for pandas 3.x compatibility
+- All public functions accept optional `config: CapiqConfig` — omitting it preserves legacy behavior
+- `test_download.py` is an integration test requiring live Excel + CIQ plugin
+- **CRITICAL**: Excel must be launched via subprocess (not `Dispatch()`) for UDFs to register — use `exceldriver._start_excel_with_addins_and_attach()`
+- In Pro CIQ compat mode: `CIQ()` and `CIQRANGE()` work; `CIQRANGEA()` does NOT (returns function name as string)
+- CIQ builder uses `=CIQ(search,"IQ_COMPANY_ID")` for ID lookup (not CIQRANGEA)
+- CIQ compat registry: `DisableCIQUDF = 0` means CIQ is ENABLED (inverted logic)
+- SPG formulas require different metric names/ID formats than CIQ — not yet fully mapped
+- COM error `-2146826259` = `#NAME?` (UDF not registered); `-2146826273` = `#VALUE!`
