@@ -1,0 +1,198 @@
+"""Non-destructive Excel lifecycle management.
+
+Launches an isolated Excel instance via subprocess with the /x flag
+(forces a new process) and finds it via the Running Object Table by
+workbook name -- so existing user Excel windows are never touched.
+"""
+from __future__ import annotations
+
+import os
+import subprocess
+import time
+from dataclasses import dataclass, field
+from typing import Optional
+
+import pythoncom
+import win32com.client
+
+from exceldriver.path import get_excel_path
+
+
+@dataclass
+class ExcelSession:
+    """Holds references to an isolated Excel instance we launched."""
+    workbook_path: str
+    workbook_name: str
+    process: Optional[subprocess.Popen] = None
+    excel: Optional[object] = None       # COM Excel.Application
+    workbook: Optional[object] = None    # COM Workbook
+
+
+def launch_excel_isolated(
+    workbook_path: str,
+    addin_init_wait: int = 30,
+    rot_poll_interval: float = 2.0,
+    rot_poll_timeout: float = 60.0,
+) -> ExcelSession:
+    """Launch Excel in a new isolated process and connect via the ROT.
+
+    Parameters
+    ----------
+    workbook_path : str
+        Absolute path to the .xlsx file to open.
+    addin_init_wait : int
+        Seconds to wait after launch for add-in initialization (default 30).
+    rot_poll_interval : float
+        Seconds between ROT polling attempts (default 2).
+    rot_poll_timeout : float
+        Max seconds to poll the ROT before giving up (default 60).
+
+    Returns
+    -------
+    ExcelSession
+        Session object with .excel, .workbook, .process handles.
+    """
+    abs_path = os.path.abspath(workbook_path)
+    wb_name = os.path.basename(abs_path)
+
+    if not os.path.exists(abs_path):
+        raise FileNotFoundError(f"Workbook not found: {abs_path}")
+
+    # Get Excel path from Windows registry (no hardcoded path)
+    excel_exe = get_excel_path()
+
+    # /x forces a new separate Excel process (does NOT suppress add-ins)
+    proc = subprocess.Popen([excel_exe, "/x", abs_path])
+
+    # Wait for add-ins to load and UDFs to register
+    time.sleep(addin_init_wait)
+
+    # Find our specific workbook in the Running Object Table
+    app, wb_com = _poll_rot_for_workbook(
+        wb_name,
+        interval=rot_poll_interval,
+        timeout=rot_poll_timeout,
+    )
+
+    return ExcelSession(
+        workbook_path=abs_path,
+        workbook_name=wb_name,
+        process=proc,
+        excel=app,
+        workbook=wb_com,
+    )
+
+
+def close_session(
+    session: ExcelSession,
+    save: bool = False,
+    delete_workbook: bool = True,
+) -> None:
+    """Close only our workbook/instance, leaving other Excel windows alone.
+
+    Parameters
+    ----------
+    session : ExcelSession
+        The session returned by launch_excel_isolated().
+    save : bool
+        Whether to save the workbook before closing (default False).
+    delete_workbook : bool
+        Whether to delete the temp XLSX file (default True).
+    """
+    # Close our workbook
+    if session.workbook is not None:
+        try:
+            session.workbook.Close(SaveChanges=save)
+        except Exception:
+            pass
+
+    # Quit our Excel instance
+    if session.excel is not None:
+        try:
+            session.excel.Quit()
+        except Exception:
+            pass
+
+    # Terminate our subprocess
+    if session.process is not None:
+        try:
+            session.process.terminate()
+        except Exception:
+            pass
+
+    # Remove the temp file
+    if delete_workbook and session.workbook_path:
+        try:
+            if os.path.exists(session.workbook_path):
+                os.remove(session.workbook_path)
+        except Exception:
+            pass
+
+
+# ── ROT helpers ──────────────────────────────────────────────────────────
+
+
+def _find_workbook_in_rot(workbook_name: str):
+    """Search the Running Object Table for a workbook by filename.
+
+    Adapted from exceldriver.tools._get_excel_running_workbook().
+
+    Returns
+    -------
+    tuple[Application, Workbook] or None
+        The COM Application and Workbook objects, or None if not found.
+    """
+    pythoncom.CoInitialize()
+    rot = pythoncom.GetRunningObjectTable()
+    rotenum = rot.EnumRunning()
+    target_len = len(workbook_name)
+    obj = None
+
+    while True:
+        monikers = rotenum.Next()
+        if not monikers:
+            break
+        try:
+            ctx = pythoncom.CreateBindCtx(0)
+            display_name = monikers[0].GetDisplayName(ctx, None)
+            if display_name[-target_len:] == workbook_name:
+                obj = rot.GetObject(monikers[0])
+        except Exception:
+            continue
+
+    if obj is None:
+        return None
+
+    wb = win32com.client.gencache.EnsureDispatch(
+        obj.QueryInterface(pythoncom.IID_IDispatch)
+    )
+    return wb.Application, wb
+
+
+def _poll_rot_for_workbook(
+    workbook_name: str,
+    interval: float = 2.0,
+    timeout: float = 60.0,
+):
+    """Poll the ROT until the workbook appears, with timeout.
+
+    Returns
+    -------
+    tuple[Application, Workbook]
+
+    Raises
+    ------
+    TimeoutError
+        If the workbook doesn't appear in the ROT within *timeout* seconds.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = _find_workbook_in_rot(workbook_name)
+        if result is not None:
+            return result
+        time.sleep(interval)
+
+    raise TimeoutError(
+        f"Workbook '{workbook_name}' did not appear in the Running Object "
+        f"Table within {timeout:.0f}s. Excel may not have started correctly."
+    )

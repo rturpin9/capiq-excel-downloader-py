@@ -2,16 +2,13 @@
 import time
 import os
 import re
-import subprocess
-import win32com.client
-import pythoncom
 import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from openpyxl import Workbook
 
-pythoncom.CoInitialize()
+from capiq_excel.excel_lifecycle import launch_excel_isolated, close_session
 
 # ── Config ──────────────────────────────────────────────────────────────
 TICKER = "DSGX"
@@ -43,19 +40,10 @@ print(f"Formula: {formula}")
 test_path = os.path.abspath("dsgx_daily_prices.xlsx")
 wb.save(test_path)
 
-# ── Step 2: Launch Excel via subprocess (required for add-in initialization) ──
-print("\nKilling any existing Excel instances...")
-os.system('taskkill /f /im excel.exe 2>NUL')
-time.sleep(5)
-
-excel_exe = r"C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE"
-print(f"Launching Excel with workbook...")
-proc = subprocess.Popen([excel_exe, test_path])
-print("Waiting 30s for add-ins to initialize...")
-time.sleep(30)
-
-# Connect via Running Object Table
-excel = win32com.client.GetActiveObject("Excel.Application")
+# ── Step 2: Launch isolated Excel instance (does NOT kill existing windows) ──
+print("\nLaunching Excel (isolated instance)...")
+session = launch_excel_isolated(test_path)
+excel = session.excel
 print(f"Connected to Excel {excel.Version}")
 
 # ── Step 3: Trigger refresh and wait ─────────────────────────────────────
@@ -69,7 +57,7 @@ except Exception as e:
 # Poll for completion
 MAX_WAIT = 180  # 3 minutes
 POLL_INTERVAL = 5
-ws_com = excel.ActiveWorkbook.Sheets(1)
+ws_com = session.workbook.Sheets(1)
 
 print(f"Waiting for formulas to evaluate (max {MAX_WAIT}s)...")
 start = time.monotonic()
@@ -136,10 +124,8 @@ for row in range(2, 500):
 
 print(f"Extracted {len(prices)} data points")
 
-# ── Step 5: Close Excel and clean up ─────────────────────────────────────
-excel.ActiveWorkbook.Close(SaveChanges=False)
-excel.Quit()
-os.remove(test_path)
+# ── Step 5: Close Excel and clean up (only our instance) ─────────────────
+close_session(session, save=False, delete_workbook=True)
 
 # ── Step 6: Build DataFrame and plot ─────────────────────────────────────
 if len(prices) < 5:
