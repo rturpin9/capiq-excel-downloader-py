@@ -139,17 +139,26 @@ def build_workbook(path: str, tickers: list[str], metrics: list,
     spill_col_letter = get_column_letter(ciqrangea_spill_col)
 
     for comp_idx, ticker in enumerate(tickers):
-        # Primary row: SPG formulas using original ticker
+        # Strip US exchange prefixes — SPG validates them against the actual
+        # listing exchange, so NYSE:WMT fails because WMT is on NASDAQGS.
+        # Plain tickers resolve fine for US stocks.  Non-US prefixes (TSX,
+        # LSE, ASX, etc.) are kept because plain tickers don't resolve
+        # reliably for international listings.
+        _US_EXCHANGES = {"NYSE", "NASDAQGS", "NASDAQGM", "NASDAQCM", "AMEX", "NYSEAMERICAN", "NYSEARCA", "BATS"}
+        prefix, _, sym = ticker.partition(":")
+        if sym and prefix.upper() in _US_EXCHANGES:
+            plain_ticker = sym
+        else:
+            plain_ticker = ticker
         primary_row = 2 + comp_idx * 2
-        ws.cell(row=primary_row, column=1, value=ticker)
+        ws.cell(row=primary_row, column=1, value=plain_ticker)
         for col_idx, (_, mnemonic, call_type) in enumerate(metrics, start=2):
-            formula = build_spg_formula(ticker, mnemonic, call_type,
+            formula = build_spg_formula(plain_ticker, mnemonic, call_type,
                                         date, curr_opt)
             ws.cell(row=primary_row, column=col_idx, value=formula)
 
-        # CIQRANGEA lookup on primary row
-        # CIQRANGEA doesn't handle EXCHANGE:TICKER format — strip prefix
-        lookup_id = ticker.split(":", 1)[1] if ":" in ticker else ticker
+        # CIQRANGEA lookup on primary row (also uses plain ticker)
+        lookup_id = plain_ticker
         ws.cell(row=primary_row, column=ciqrangea_col,
                 value=f'=CIQRANGEA("{lookup_id}","IQ_COMPANY_ID_QUICK_MATCH",1,1)')
 
