@@ -14,16 +14,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 
 from mcp.server.fastmcp import FastMCP
 
 # ── Logging to stderr only ─────────────────────────────────────────────────
 
+_log_file = os.path.join(os.path.expanduser("~"), "capiq_mcp_debug.log")
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-    stream=sys.stderr,
+    handlers=[
+        logging.FileHandler(_log_file, mode="w"),
+        logging.StreamHandler(sys.stderr),
+    ],
 )
 log = logging.getLogger("capiq_mcp")
 

@@ -15,6 +15,7 @@ from typing import Optional
 import logging
 
 import pythoncom
+import win32api
 import win32com.client
 
 from exceldriver.path import get_excel_path
@@ -72,10 +73,24 @@ def launch_excel_isolated(
     # Get Excel path from Windows registry (no hardcoded path)
     excel_exe = get_excel_path()
 
-    # /x forces a new separate Excel process (does NOT suppress add-ins)
-    proc = subprocess.Popen([excel_exe, "/x", abs_path])
+    # Launch Excel via ShellExecute so it's created as a child of the
+    # Windows Shell (explorer.exe), fully outside the MCP server's process
+    # tree and any Windows Job Objects constraining it.  subprocess.Popen
+    # creates a child process that inherits the parent's job object, which
+    # can block Excel from launching until the parent is interrupted.
+    log.info("Launching Excel via ShellExecute: %s /x %s", excel_exe, abs_path)
+    win32api.ShellExecute(
+        0,                       # hwnd (no parent window)
+        "open",                  # verb
+        excel_exe,               # program
+        f'/x "{abs_path}"',      # parameters
+        None,                    # working directory
+        1,                       # SW_SHOWNORMAL
+    )
+    log.info("ShellExecute returned — Excel launch initiated")
 
     # Phase 1: Find our workbook in the Running Object Table
+    log.info("Phase 1: Polling ROT for workbook '%s' ...", wb_name)
     app, wb_com = _poll_rot_for_workbook(
         wb_name,
         interval=rot_poll_interval,
@@ -94,12 +109,14 @@ def launch_excel_isolated(
         pass
 
     # Phase 2: Poll until add-in UDFs are registered
+    log.info("Phase 1 complete. Phase 2: Waiting for UDFs ...")
     _wait_for_udfs(app, timeout=addin_init_timeout, interval=addin_poll_interval)
+    log.info("Phase 2 complete. Excel session ready.")
 
     return ExcelSession(
         workbook_path=abs_path,
         workbook_name=wb_name,
-        process=proc,
+        process=None,  # ShellExecute doesn't return a process handle; cleanup uses COM app.Quit()
         excel=app,
         workbook=wb_com,
     )
@@ -216,7 +233,11 @@ def _poll_rot_for_workbook(
         If the workbook doesn't appear in the ROT within *timeout* seconds.
     """
     deadline = time.monotonic() + timeout
+    attempt = 0
     while time.monotonic() < deadline:
+        attempt += 1
+        log.debug("ROT poll attempt %d (%.1fs elapsed)", attempt,
+                  timeout - (deadline - time.monotonic()))
         result = _find_workbook_in_rot(workbook_name)
         if result is not None:
             log.info("Found workbook '%s' in ROT after %.1fs",
