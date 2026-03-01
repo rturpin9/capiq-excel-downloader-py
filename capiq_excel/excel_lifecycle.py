@@ -30,18 +30,25 @@ class ExcelSession:
 
 def launch_excel_isolated(
     workbook_path: str,
-    addin_init_wait: int = 30,
+    addin_init_timeout: float = 60.0,
+    addin_poll_interval: float = 2.0,
     rot_poll_interval: float = 2.0,
     rot_poll_timeout: float = 60.0,
 ) -> ExcelSession:
     """Launch Excel in a new isolated process and connect via the ROT.
 
+    Instead of blindly sleeping for add-in initialization, this polls
+    the ROT for the workbook first, then checks whether UDFs are
+    registered by evaluating a lightweight probe formula.
+
     Parameters
     ----------
     workbook_path : str
         Absolute path to the .xlsx file to open.
-    addin_init_wait : int
-        Seconds to wait after launch for add-in initialization (default 30).
+    addin_init_timeout : float
+        Max seconds to wait for add-in UDFs to register (default 60).
+    addin_poll_interval : float
+        Seconds between UDF readiness checks (default 2).
     rot_poll_interval : float
         Seconds between ROT polling attempts (default 2).
     rot_poll_timeout : float
@@ -64,15 +71,15 @@ def launch_excel_isolated(
     # /x forces a new separate Excel process (does NOT suppress add-ins)
     proc = subprocess.Popen([excel_exe, "/x", abs_path])
 
-    # Wait for add-ins to load and UDFs to register
-    time.sleep(addin_init_wait)
-
-    # Find our specific workbook in the Running Object Table
+    # Phase 1: Find our workbook in the Running Object Table
     app, wb_com = _poll_rot_for_workbook(
         wb_name,
         interval=rot_poll_interval,
         timeout=rot_poll_timeout,
     )
+
+    # Phase 2: Poll until add-in UDFs are registered
+    _wait_for_udfs(app, timeout=addin_init_timeout, interval=addin_poll_interval)
 
     return ExcelSession(
         workbook_path=abs_path,
@@ -196,3 +203,57 @@ def _poll_rot_for_workbook(
         f"Workbook '{workbook_name}' did not appear in the Running Object "
         f"Table within {timeout:.0f}s. Excel may not have started correctly."
     )
+
+
+def _wait_for_udfs(
+    app,
+    timeout: float = 60.0,
+    interval: float = 2.0,
+) -> None:
+    """Poll until CIQ/SPG UDFs are registered in Excel.
+
+    Uses Application.Evaluate() to test a lightweight probe formula.
+    When UDFs aren't registered yet, Evaluate returns a COM error code
+    (-2146826259 = #NAME?) or None. Once registered, it returns a
+    string or numeric value (even an error like #INVALID COMPANY ID
+    means the UDF is working).
+
+    Tries SPG first (Pro add-in), then CIQ (compat mode). Either one
+    succeeding means the add-in is ready.
+    """
+    # Probe formulas — use nonsense identifier so they evaluate fast
+    # (we only care that the UDF is callable, not that it returns data)
+    probes = [
+        'SPG("__PROBE__","SP_COMPANY_NAME")',
+        'CIQ("__PROBE__","IQ_COMPANY_NAME")',
+    ]
+
+    start = time.monotonic()
+    while True:
+        elapsed = time.monotonic() - start
+        if elapsed > timeout:
+            # Don't raise — proceed anyway; formulas may still work
+            # once RefreshSheet is called
+            print(f"  UDF readiness: timeout after {timeout:.0f}s, proceeding anyway")
+            return
+
+        for probe in probes:
+            try:
+                result = app.Evaluate(probe)
+            except Exception:
+                continue
+
+            # COM error -2146826259 = #NAME? → UDF not registered yet
+            if isinstance(result, int) and result == -2146826259:
+                continue
+
+            # None → not evaluated yet
+            if result is None:
+                continue
+
+            # Any other result (string, number, or a different COM error)
+            # means the UDF is callable — add-in is ready
+            print(f"  UDF ready after {elapsed:.1f}s")
+            return
+
+        time.sleep(interval)
