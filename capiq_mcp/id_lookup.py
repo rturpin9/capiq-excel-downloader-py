@@ -82,7 +82,8 @@ def run_id_lookup(identifiers: list[str], max_wait: int = 60) -> dict:
         except Exception as e:
             log.warning("RefreshSheet warning: %s", e)
 
-        # Poll for completion — just check CIQRANGEA spill cells
+        # Poll for completion — batch read CIQRANGEA spill cells
+        n = len(identifiers)
         start = time.monotonic()
         while True:
             elapsed = time.monotonic() - start
@@ -90,10 +91,17 @@ def run_id_lookup(identifiers: list[str], max_wait: int = 60) -> dict:
                 log.warning("ID lookup timeout after %ds", max_wait)
                 break
 
+            # Single batch read for spill column
+            if n == 1:
+                spill_vals = ((ws_com.Cells(2, 3).Value,),)
+            else:
+                spill_vals = ws_com.Range(
+                    ws_com.Cells(2, 3), ws_com.Cells(1 + n, 3)
+                ).Value
+
             all_done = True
-            for idx in range(len(identifiers)):
-                row = idx + 2
-                val = ws_com.Cells(row, 3).Value  # spill column
+            for row_tuple in spill_vals:
+                val = row_tuple[0]
                 if val is None:
                     all_done = False
                     break
@@ -107,12 +115,18 @@ def run_id_lookup(identifiers: list[str], max_wait: int = 60) -> dict:
 
             time.sleep(2)
 
-        # Read results
+        # Batch read results (columns C-D)
+        if n == 1:
+            result_vals = ((ws_com.Cells(2, 3).Value, ws_com.Cells(2, 4).Value),)
+        else:
+            result_vals = ws_com.Range(
+                ws_com.Cells(2, 3), ws_com.Cells(1 + n, 4)
+            ).Value
+
         results = []
         for idx, ident in enumerate(identifiers):
-            row = idx + 2
-            iq_id = ws_com.Cells(row, 3).Value  # spill cell
-            company_name = ws_com.Cells(row, 4).Value
+            iq_id = result_vals[idx][0]
+            company_name = result_vals[idx][1]
 
             # Classify result
             if iq_id is None or (isinstance(iq_id, str) and

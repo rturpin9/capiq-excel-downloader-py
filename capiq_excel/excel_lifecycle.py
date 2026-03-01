@@ -82,6 +82,12 @@ def launch_excel_isolated(
         timeout=rot_poll_timeout,
     )
 
+    # Suppress modal dialogs that would block COM calls from MCP/headless callers
+    try:
+        app.DisplayAlerts = False
+    except Exception:
+        pass
+
     # Phase 2: Poll until add-in UDFs are registered
     _wait_for_udfs(app, timeout=addin_init_timeout, interval=addin_poll_interval)
 
@@ -174,7 +180,7 @@ def _find_workbook_in_rot(workbook_name: str):
     if obj is None:
         return None
 
-    wb = win32com.client.gencache.EnsureDispatch(
+    wb = win32com.client.Dispatch(
         obj.QueryInterface(pythoncom.IID_IDispatch)
     )
     return wb.Application, wb

@@ -427,10 +427,19 @@ def dataframe_to_json(df: pd.DataFrame, mode: str, currency: str,
 
 def poll_for_completion(ws_com, num_companies: int, num_metrics: int,
                         max_wait: float) -> None:
-    """Poll formula cells until data is ready or timeout."""
+    """Poll formula cells until data is ready or timeout.
+
+    Uses a single batch COM read per cycle instead of cell-by-cell access.
+    """
     num_formulas = num_companies * num_metrics * 2  # primary + fallback
     log.info("Waiting for %d formulas (max %ds)...", num_formulas, max_wait)
     start = time.monotonic()
+
+    total_rows = num_companies * 2
+    first_row = 2
+    last_row = 1 + total_rows
+    first_col = 2
+    last_col = num_metrics + 1
 
     while True:
         elapsed = time.monotonic() - start
@@ -438,18 +447,20 @@ def poll_for_completion(ws_com, num_companies: int, num_metrics: int,
             log.warning("Timeout after %ds — proceeding with available data", max_wait)
             break
 
+        # Single batch COM read for all formula cells
+        data = ws_com.Range(
+            ws_com.Cells(first_row, first_col),
+            ws_com.Cells(last_row, last_col),
+        ).Value
+
         pending = False
         resolved = 0
-        for comp_idx in range(num_companies):
-            for row_offset in (0, 1):
-                row = 2 + comp_idx * 2 + row_offset
-                for met_idx in range(num_metrics):
-                    col = met_idx + 2
-                    val = ws_com.Cells(row, col).Value
-                    if isinstance(val, str) and val.upper() in ('#PEND', '#REFRESH'):
-                        pending = True
-                    elif val is not None and not (isinstance(val, (int, float)) and val < -2000000000):
-                        resolved += 1
+        for row_data in data:
+            for val in row_data:
+                if isinstance(val, str) and val.upper() in ('#PEND', '#REFRESH'):
+                    pending = True
+                elif val is not None and not (isinstance(val, (int, float)) and val < -2000000000):
+                    resolved += 1
 
         if not pending and resolved > num_formulas * 0.5:
             log.info("Data ready: %d/%d cells resolved in %.0fs", resolved, num_formulas, elapsed)
