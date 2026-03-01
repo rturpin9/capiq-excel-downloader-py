@@ -78,20 +78,29 @@ def _build_market_formula(
 def _build_multiple_formula(
     id_ref: str, metric: str, period_type: str, start: str, end: str, label: str
 ) -> str:
-    """CIQRANGEV formula for pre-calculated multiples (period type + date range)."""
+    """CIQRANGEV formula for pre-calculated multiples (period type + date range).
+
+    CIQRANGEV params: id(1), metric(2), period_type(3), start(4), end(5),
+                      currency(6), primary(7), metatag(8), label(9)
+    """
     return (
         f'=CIQRANGEV({id_ref},"{metric}",{period_type}'
-        f',"{start}","{end}",,,,,"{label}")'
+        f',"{start}","{end}",,,,"{label}")'
     )
 
 
 def _build_financial_formula(
     id_ref: str, metric: str, freq_period: str, label: str
 ) -> str:
-    """CIQRANGE formula for financial data (period offset)."""
+    """CIQRANGE formula for financial data (period offset).
+
+    CIQRANGE params: id(1), metric(2), start_period(3), end_period(4),
+                     periodicity(5), report_type(6), primary(7), metatag(8),
+                     currency(9), label(10)
+    """
     return (
         f'=CIQRANGE({id_ref},"{metric}",{freq_period}'
-        f',,,,,,,,"{label}")'
+        f',,,,,,,"{label}")'
     )
 
 

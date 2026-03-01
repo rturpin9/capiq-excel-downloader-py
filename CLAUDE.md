@@ -203,6 +203,7 @@ python pull_comps.py DSGX ROP MANH --currency USD --mode excluding-leases
 - **`IQ_COMPANY_ID_QUICK_MATCH` does NOT accept `EXCHANGE:TICKER` format** (e.g. `TSX:CSU` fails, `CSU` works) — strip exchange prefix before passing. This applies to both CIQRANGE and CIQRANGEA (they resolve identically, only output direction differs).
 - `EXCHANGE:TICKER` format IS accepted as direct input to CIQRANGE/CIQRANGEA/CIQRANGEV for financial and market data formulas — no ID resolution needed
 - **Quick match is fuzzy** — returns closest match, which may not be the intended company in edge cases. Use only as fallback when tickers aren't found. Prefer precise identifiers (exact ticker, CUSIP, ISIN) and verify the resolved company name matches expectations.
+- **5-year max for daily data** — CIQRANGE/CIQRANGEV date-ranged formulas reject exactly 5 years; range must be strictly less (e.g. start_date + 1 day)
 - `CIQ()` only resolves tickers and IQ IDs — does NOT resolve company names, CUSIPs, or ISINs
 - SPG ID lookup uses different identifier namespace (returns SPG-internal IDs, not IQ IDs) — not compatible with CIQ formulas
 - CIQ compat registry: `DisableCIQUDF = 0` means CIQ is ENABLED (inverted logic)
