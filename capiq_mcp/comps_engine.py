@@ -407,27 +407,55 @@ def build_table_excluding_leases(results: list[dict]) -> pd.DataFrame:
 
 # ── JSON serialization ─────────────────────────────────────────────────────
 
+# Precision mapping for numeric columns
+_ROUND_0 = frozenset({
+    "Mkt Cap", "Total Debt", "Leases", "Cash", "Net Debt", "TEV",
+    "LTM Rev", "NTM Rev", "LTM EBITDA", "Lease Adj", "NTM EBITDA",
+})
+_ROUND_1 = frozenset({"EBITDA Margin %"})
+_ROUND_2 = frozenset({"EV/Rev", "EV/LTM EBITDA", "EV/NTM EBITDA", "P/BV", "ND/EBITDA"})
+
+
+def _round_value(col: str, val: float) -> float | int:
+    """Round a float to the appropriate precision for its column."""
+    if col in _ROUND_0:
+        return round(val)
+    if col in _ROUND_1:
+        return round(val, 1)
+    if col in _ROUND_2:
+        return round(val, 2)
+    return val
+
+
 def dataframe_to_json(df: pd.DataFrame, mode: str, currency: str,
                       date: str, lease_adjust_ntm: bool) -> dict:
-    """Convert a comp table DataFrame to a structured dict for MCP output."""
+    """Convert a comp table DataFrame to a structured dict for MCP output.
+
+    Applies intelligent rounding and strips None/NaN values to minimize tokens.
+    """
     output = {
         "mode": mode,
         "currency": currency,
         "date": date,
-        "lease_adjust_ntm": lease_adjust_ntm if mode == "lease-adjusted" else None,
-        "companies": [],
     }
+    if mode == "lease-adjusted":
+        output["lease_adjust_ntm"] = lease_adjust_ntm
+
+    companies = []
     for _, row in df.iterrows():
         company = {}
         for col in df.columns:
             val = row[col]
             if isinstance(val, float) and np.isnan(val):
-                company[col] = None
+                continue  # strip None/NaN values
             elif isinstance(val, (np.floating, np.integer)):
-                company[col] = float(val)
+                company[col] = _round_value(col, float(val))
+            elif isinstance(val, float):
+                company[col] = _round_value(col, val)
             else:
                 company[col] = val
-        output["companies"].append(company)
+        companies.append(company)
+    output["companies"] = companies
     return output
 
 
@@ -580,7 +608,14 @@ def run_comps(
 
     # Convert to JSON-serializable dict
     data = dataframe_to_json(df, mode, currency, date, lease_adjust_ntm)
-    data["resolution_notes"] = resolution_notes
+
+    # Merge resolution into company dicts (only non-OK statuses)
+    for note, company in zip(resolution_notes, data["companies"]):
+        status = note.get("status", "OK")
+        if status != "OK":
+            company["_resolution"] = status
+            if note.get("resolved_iq_id"):
+                company["_resolved_iq_id"] = note["resolved_iq_id"]
 
     log.info("Comp pull complete: %d companies", len(data["companies"]))
     return data

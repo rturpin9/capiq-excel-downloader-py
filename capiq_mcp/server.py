@@ -110,9 +110,9 @@ async def pull_comps(
         max_wait: Max seconds to wait for formula refresh (default 180).
 
     Returns:
-        Dict with keys: mode, currency, date, lease_adjust_ntm, companies
-        (list of company dicts with all metrics and derived multiples),
-        and resolution_notes (list of per-ticker resolution status).
+        Dict with keys: mode, currency, date, companies (list of company
+        dicts with rounded metrics and derived multiples; non-OK resolution
+        status merged as _resolution/_resolved_iq_id per company).
     """
     log.info("pull_comps called: %d tickers", len(tickers) if tickers else 0)
     if not tickers:
@@ -233,8 +233,8 @@ async def pull_chart_data(
         max_wait: Max seconds to wait for formula refresh (default 180).
 
     Returns:
-        Dict with keys: chart_path (PNG location), data (time-series per ticker),
-        resolution_notes (per-ticker resolution status), chart_config.
+        Dict with keys: chart_path (PNG location), data (summary stats per
+        ticker with count/first/last/min/max/mean/change_pct), chart_config.
     """
     log.info("pull_chart_data called: %d tickers, metric_type=%s", len(tickers) if tickers else 0, metric_type)
     if not tickers:

@@ -757,26 +757,48 @@ def _render_dual_axis_chart(
 # ── JSON serialization ────────────────────────────────────────────────────
 
 
-def _serialize_data(data: dict) -> dict:
-    """Convert extracted data to JSON-serializable format."""
-    serialized = {}
+def _summarize_data(data: dict) -> dict:
+    """Summarize extracted data into compact stats instead of raw arrays.
+
+    The chart PNG is the primary output — the LLM only needs summary
+    statistics to describe the data, not the full time series.
+    """
+    summarized = {}
     for ticker, ticker_data in data.items():
         s = {}
         for key, values in ticker_data.items():
             if key == "_num_points":
                 continue
             if key == "dates":
-                s["dates"] = [
-                    d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)
-                    for d in values
-                ]
+                # Only first and last date
+                valid = [d for d in values if d is not None]
+                if valid:
+                    first = valid[0]
+                    last = valid[-1]
+                    s["dates"] = {
+                        "first": first.strftime("%Y-%m-%d") if hasattr(first, "strftime") else str(first),
+                        "last": last.strftime("%Y-%m-%d") if hasattr(last, "strftime") else str(last),
+                    }
             else:
-                s[key] = [
-                    None if (isinstance(v, float) and np.isnan(v)) else v
-                    for v in values
-                ]
-        serialized[ticker] = s
-    return serialized
+                clean = [v for v in values if isinstance(v, (int, float)) and not np.isnan(v)]
+                if clean:
+                    first_val = clean[0]
+                    last_val = clean[-1]
+                    change_pct = ((last_val / first_val) - 1) * 100 if first_val != 0 else None
+                    s[key] = {
+                        "count": len(clean),
+                        "first": round(first_val, 2),
+                        "last": round(last_val, 2),
+                        "min": round(min(clean), 2),
+                        "max": round(max(clean), 2),
+                        "mean": round(sum(clean) / len(clean), 2),
+                    }
+                    if change_pct is not None:
+                        s[key]["change_pct"] = round(change_pct, 1)
+                else:
+                    s[key] = {"count": 0}
+        summarized[ticker] = s
+    return summarized
 
 
 # ── Main pipeline ─────────────────────────────────────────────────────────
@@ -833,7 +855,7 @@ def run_chart(
 
     Returns
     -------
-    dict with keys: chart_path, data, resolution_notes, chart_config.
+    dict with keys: chart_path, data (summary stats per ticker), chart_config.
     """
     pythoncom.CoInitialize()
 
@@ -948,19 +970,33 @@ def run_chart(
 
     log.info("Chart saved: %s", chart_path)
 
+    # Build chart_config, omitting irrelevant keys
+    chart_config = {
+        "chart_type": chart_type,
+        "metric_type": metric_type,
+        "currency": currency,
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+    if indexed:
+        chart_config["indexed"] = True
+    if metric_type == "multiple":
+        chart_config["period_type"] = period_type
+    if metric_type == "financial":
+        chart_config["frequency"] = frequency
+        chart_config["num_periods"] = num_periods
+
+    # Merge resolution into data summaries (only non-OK statuses)
+    data_summary = _summarize_data(data)
+    for note in resolution_notes:
+        ticker = note.get("ticker")
+        if ticker and ticker in data_summary and note.get("status") != "OK":
+            data_summary[ticker]["_resolution"] = note["status"]
+            if note.get("iq_id"):
+                data_summary[ticker]["_resolved_iq_id"] = note["iq_id"]
+
     return {
         "chart_path": chart_path.replace("\\", "/"),
-        "data": _serialize_data(data),
-        "resolution_notes": resolution_notes,
-        "chart_config": {
-            "chart_type": chart_type,
-            "metric_type": metric_type,
-            "indexed": indexed,
-            "currency": currency,
-            "start_date": start_date,
-            "end_date": end_date,
-            "period_type": period_type if metric_type == "multiple" else None,
-            "frequency": frequency if metric_type == "financial" else None,
-            "num_periods": num_periods if metric_type == "financial" else None,
-        },
+        "data": data_summary,
+        "chart_config": chart_config,
     }
