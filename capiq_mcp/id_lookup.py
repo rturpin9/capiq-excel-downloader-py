@@ -9,7 +9,10 @@ import logging
 import os
 import time
 
+import pythoncom
 from openpyxl import Workbook
+
+from capiq_mcp.comps_engine import _ERROR_TOKENS
 
 log = logging.getLogger("capiq_mcp")
 
@@ -63,7 +66,6 @@ def run_id_lookup(identifiers: list[str], max_wait: int = 60) -> dict:
     dict
         {"results": [{"input": ..., "iq_id": ..., "company_name": ..., "status": ...}]}
     """
-    import pythoncom
     pythoncom.CoInitialize()
 
     from capiq_excel.excel_lifecycle import launch_excel_isolated, close_session
@@ -78,7 +80,6 @@ def run_id_lookup(identifiers: list[str], max_wait: int = 60) -> dict:
         ws_com = session.workbook.Sheets(1)
 
         # Trigger refresh
-        import pythoncom
         log.info("Calling RefreshSheet for ID lookup...")
         try:
             pythoncom.PumpWaitingMessages()
@@ -160,8 +161,7 @@ def run_id_lookup(identifiers: list[str], max_wait: int = 60) -> dict:
 
             # Classify result
             if iq_id is None or (isinstance(iq_id, str) and
-                                  any(tok in iq_id.upper() for tok in
-                                      ("#ERROR", "#INVALID", "#NAME", "KEYERROR"))):
+                                  any(tok in iq_id.upper() for tok in _ERROR_TOKENS)):
                 results.append({
                     "input": ident,
                     "iq_id": None,
@@ -172,7 +172,7 @@ def run_id_lookup(identifiers: list[str], max_wait: int = 60) -> dict:
                 name = None
                 if company_name and isinstance(company_name, str):
                     upper = company_name.upper()
-                    if not any(tok in upper for tok in ("#ERROR", "#INVALID", "#NAME")):
+                    if not any(tok in upper for tok in _ERROR_TOKENS):
                         name = company_name
                 results.append({
                     "input": ident,

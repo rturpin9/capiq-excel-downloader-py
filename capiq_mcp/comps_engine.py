@@ -15,7 +15,21 @@ import pandas as pd
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 
+import pythoncom
+
 log = logging.getLogger("capiq_mcp")
+
+# ── Constants ─────────────────────────────────────────────────────────────
+
+_US_EXCHANGES = frozenset({
+    "NYSE", "NASDAQGS", "NASDAQGM", "NASDAQCM",
+    "AMEX", "NYSEAMERICAN", "NYSEARCA", "BATS",
+})
+
+_ERROR_TOKENS = (
+    "#ERROR", "#INVALID", "#PEND", "#REFRESH", "#NAME",
+    "#OUTSIDE", "KEYERROR", "DEFUNCT", "INVALID", "NM", "(INVALID",
+)
 
 # ── Metric definitions ─────────────────────────────────────────────────────
 
@@ -54,55 +68,41 @@ METRICS_EXCLUDING_LEASES = [
 
 # ── Formula builders ───────────────────────────────────────────────────────
 
+def _build_spg_formula(id_expr: str, mnemonic: str, call_type: str,
+                       date: str, curr_opt: str) -> str:
+    """Build an SPG formula string for a given metric type.
+
+    Parameters
+    ----------
+    id_expr : str
+        Either a quoted ticker like ``'"DSGX"'`` or a cell reference like ``'$P$2'``.
+    """
+    m = f'"{mnemonic}"'
+    d = f'"{date}"'
+    c = f'"{curr_opt}"'
+
+    if call_type == "name":
+        return f"=SPG({id_expr}, {m})"
+    elif call_type == "market":
+        return f"=SPG({id_expr}, {m}, {d}, {c})"
+    elif call_type == "bs":
+        return f'=SPG({id_expr}, {m}, "FQ0", {d}, {c})'
+    elif call_type == "ltm":
+        return f'=SPG({id_expr}, {m}, "LTM", {d}, {c})'
+    elif call_type == "ntm":
+        return f'=SPG({id_expr}, {m}, "NTM", {d}, {c})'
+    elif call_type == "ltm_raw":
+        return f'=SPG({id_expr}, {m}, "LTM", {d})'
+    elif call_type == "gaap":
+        return f'=CIQ({id_expr}, {m})'
+    else:
+        raise ValueError(f"Unknown call_type: {call_type}")
+
+
 def build_spg_formula(ticker: str, mnemonic: str, call_type: str,
                       date: str, curr_opt: str) -> str:
-    """Build an SPG formula string for a given metric type."""
-    t = f'"{ticker}"'
-    m = f'"{mnemonic}"'
-    d = f'"{date}"'
-    c = f'"{curr_opt}"'
-
-    if call_type == "name":
-        return f"=SPG({t}, {m})"
-    elif call_type == "market":
-        return f"=SPG({t}, {m}, {d}, {c})"
-    elif call_type == "bs":
-        return f'=SPG({t}, {m}, "FQ0", {d}, {c})'
-    elif call_type == "ltm":
-        return f'=SPG({t}, {m}, "LTM", {d}, {c})'
-    elif call_type == "ntm":
-        return f'=SPG({t}, {m}, "NTM", {d}, {c})'
-    elif call_type == "ltm_raw":
-        return f'=SPG({t}, {m}, "LTM", {d})'
-    elif call_type == "gaap":
-        return f'=CIQ({t}, {m})'
-    else:
-        raise ValueError(f"Unknown call_type: {call_type}")
-
-
-def _build_spg_formula_with_ref(cell_ref: str, mnemonic: str, call_type: str,
-                                 date: str, curr_opt: str) -> str:
-    """Build SPG formula using a cell reference for the identifier."""
-    m = f'"{mnemonic}"'
-    d = f'"{date}"'
-    c = f'"{curr_opt}"'
-
-    if call_type == "name":
-        return f"=SPG({cell_ref}, {m})"
-    elif call_type == "market":
-        return f"=SPG({cell_ref}, {m}, {d}, {c})"
-    elif call_type == "bs":
-        return f'=SPG({cell_ref}, {m}, "FQ0", {d}, {c})'
-    elif call_type == "ltm":
-        return f'=SPG({cell_ref}, {m}, "LTM", {d}, {c})'
-    elif call_type == "ntm":
-        return f'=SPG({cell_ref}, {m}, "NTM", {d}, {c})'
-    elif call_type == "ltm_raw":
-        return f'=SPG({cell_ref}, {m}, "LTM", {d})'
-    elif call_type == "gaap":
-        return f'=CIQ({cell_ref}, {m})'
-    else:
-        raise ValueError(f"Unknown call_type: {call_type}")
+    """Build an SPG formula string with a quoted ticker identifier."""
+    return _build_spg_formula(f'"{ticker}"', mnemonic, call_type, date, curr_opt)
 
 
 # ── Workbook creation ──────────────────────────────────────────────────────
@@ -144,7 +144,6 @@ def build_workbook(path: str, tickers: list[str], metrics: list,
         # Plain tickers resolve fine for US stocks.  Non-US prefixes (TSX,
         # LSE, ASX, etc.) are kept because plain tickers don't resolve
         # reliably for international listings.
-        _US_EXCHANGES = {"NYSE", "NASDAQGS", "NASDAQGM", "NASDAQCM", "AMEX", "NYSEAMERICAN", "NYSEARCA", "BATS"}
         prefix, _, sym = ticker.partition(":")
         if sym and prefix.upper() in _US_EXCHANGES:
             plain_ticker = sym
@@ -167,8 +166,8 @@ def build_workbook(path: str, tickers: list[str], metrics: list,
         spill_ref = f"${spill_col_letter}${primary_row}"
         ws.cell(row=fallback_row, column=1, value=f"(fallback for {ticker})")
         for col_idx, (_, mnemonic, call_type) in enumerate(metrics, start=2):
-            formula = _build_spg_formula_with_ref(spill_ref, mnemonic, call_type,
-                                                   date, curr_opt)
+            formula = _build_spg_formula(spill_ref, mnemonic, call_type,
+                                         date, curr_opt)
             ws.cell(row=fallback_row, column=col_idx, value=formula)
 
     wb.save(path)
@@ -189,10 +188,7 @@ def safe_float(val) -> float:
         return float(val)
     if isinstance(val, str):
         upper = val.upper()
-        error_tokens = ("#ERROR", "#INVALID", "#PEND", "#REFRESH", "#NAME",
-                        "#OUTSIDE", "KEYERROR", "DEFUNCT", "INVALID", "NM",
-                        "(INVALID")
-        if any(tok in upper for tok in error_tokens):
+        if any(tok in upper for tok in _ERROR_TOKENS):
             return np.nan
         try:
             return float(val.replace(",", ""))
@@ -209,9 +205,7 @@ def is_error_value(val) -> bool:
         return True
     if isinstance(val, str):
         upper = val.upper()
-        error_tokens = ("#ERROR", "#INVALID", "#PEND", "#REFRESH", "#NAME",
-                        "#OUTSIDE", "KEYERROR", "DEFUNCT", "(INVALID")
-        return any(tok in upper for tok in error_tokens)
+        return any(tok in upper for tok in _ERROR_TOKENS)
     return False
 
 
@@ -242,12 +236,15 @@ def read_results(ws_com, num_companies: int, metrics: list) -> tuple[list[dict],
         ws_com.Cells(last_row, last_data_col)
     ).Value
 
-    # Read CIQRANGEA spill column for all primary rows
-    id_values = []
-    for comp_idx in range(num_companies):
-        primary_row = 2 + comp_idx * 2
-        val = ws_com.Cells(primary_row, ciqrangea_spill_col).Value
-        id_values.append(val)
+    # Batch-read CIQRANGEA spill column for all primary rows (single COM call)
+    if num_companies == 1:
+        id_values = [ws_com.Cells(2, ciqrangea_spill_col).Value]
+    else:
+        all_id_vals = ws_com.Range(
+            ws_com.Cells(2, ciqrangea_spill_col),
+            ws_com.Cells(last_row, ciqrangea_spill_col),
+        ).Value
+        id_values = [all_id_vals[comp_idx * 2][0] for comp_idx in range(num_companies)]
 
     results = []
     resolution_notes = []
@@ -491,7 +488,6 @@ def poll_for_completion(ws_com, num_companies: int, num_metrics: int,
                       elapsed, primary_resolved, num_primary_cells, primary_pending)
 
         # Pump COM message queue to prevent STA deadlocks
-        import pythoncom
         pythoncom.PumpWaitingMessages()
         time.sleep(5)
 
@@ -528,7 +524,6 @@ def run_comps(
     dict
         Structured result with companies array and resolution_notes.
     """
-    import pythoncom
     pythoncom.CoInitialize()
 
     from capiq_excel.excel_lifecycle import launch_excel_isolated, close_session
@@ -559,7 +554,6 @@ def run_comps(
         ws_com = session.workbook.Sheets(1)
 
         # Trigger refresh
-        import pythoncom
         log.info("Calling RefreshSheet...")
         try:
             pythoncom.PumpWaitingMessages()

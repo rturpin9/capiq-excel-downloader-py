@@ -170,8 +170,7 @@ def close_session(
     # Remove the temp file
     if delete_workbook and session.workbook_path:
         try:
-            if os.path.exists(session.workbook_path):
-                os.remove(session.workbook_path)
+            os.remove(session.workbook_path)
         except Exception:
             pass
 

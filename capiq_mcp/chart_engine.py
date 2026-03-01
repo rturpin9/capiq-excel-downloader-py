@@ -17,6 +17,8 @@ import os
 import time
 from datetime import datetime, timedelta
 
+import pythoncom
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -398,7 +400,6 @@ def _extract_financial_data(
 
 def _poll_chart_data(ws_com, columns: list, max_wait: float) -> None:
     """Poll data sheet until formulas resolve or timeout."""
-    import pythoncom
     log.info("Waiting for %d data columns (max %ds)...", len(columns), max_wait)
     start = time.monotonic()
 
@@ -834,7 +835,6 @@ def run_chart(
     -------
     dict with keys: chart_path, data, resolution_notes, chart_config.
     """
-    import pythoncom
     pythoncom.CoInitialize()
 
     from capiq_excel.excel_lifecycle import launch_excel_isolated, close_session
