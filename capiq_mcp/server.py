@@ -16,6 +16,7 @@ import asyncio
 import logging
 import os
 import sys
+import threading
 
 from mcp.server.fastmcp import FastMCP
 
@@ -41,6 +42,45 @@ mcp = FastMCP(
 
 # Serialize Excel sessions — only one at a time
 _excel_lock = asyncio.Lock()
+
+
+# ── Preload heavy modules in a background thread at startup ───────────────
+# matplotlib + numpy + pandas take ~3 min to import on this machine.
+# Loading them eagerly means the first tool call won't stall.
+
+def _preload():
+    log.info("Preloading heavy modules (matplotlib, numpy, pandas) ...")
+    import capiq_mcp.chart_engine    # pulls matplotlib, numpy, pandas, openpyxl
+    import capiq_mcp.comps_engine    # pulls numpy, pandas, openpyxl
+    import capiq_mcp.id_lookup       # pulls openpyxl
+    log.info("Preload complete.")
+
+threading.Thread(target=_preload, daemon=True, name="preload").start()
+
+
+async def _run_in_thread(func, **kwargs):
+    """Run *func* in a dedicated thread, bypassing asyncio's ThreadPoolExecutor.
+
+    asyncio.to_thread() on Windows with IocpProactor can stall indefinitely
+    before the thread pool starts the work.  This helper spawns a real
+    threading.Thread and bridges the result back via loop.call_soon_threadsafe.
+    """
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+
+    def worker():
+        try:
+            log.info("Worker thread started (tid=%d)", threading.current_thread().ident)
+            result = func(**kwargs)
+            loop.call_soon_threadsafe(future.set_result, result)
+        except Exception as exc:
+            loop.call_soon_threadsafe(future.set_exception, exc)
+
+    t = threading.Thread(target=worker, daemon=True)
+    log.info("Spawning worker thread ...")
+    t.start()
+    log.info("Worker thread spawned, awaiting result ...")
+    return await future
 
 
 @mcp.tool()
@@ -74,6 +114,7 @@ async def pull_comps(
         (list of company dicts with all metrics and derived multiples),
         and resolution_notes (list of per-ticker resolution status).
     """
+    log.info("pull_comps called: %d tickers", len(tickers) if tickers else 0)
     if not tickers:
         return {"error": "validation", "message": "No tickers provided"}
 
@@ -81,12 +122,16 @@ async def pull_comps(
         return {"error": "validation",
                 "message": f"Invalid mode '{mode}'. Use 'lease-adjusted' or 'excluding-leases'"}
 
+    log.info("pull_comps: acquiring lock ...")
     async with _excel_lock:
+        log.info("pull_comps: lock acquired, launching thread ...")
         try:
-            # Lazy import to avoid COM init at module level
-            from capiq_mcp.comps_engine import run_comps
-            result = await asyncio.to_thread(
-                run_comps,
+            def _worker(**kw):
+                from capiq_mcp.comps_engine import run_comps
+                return run_comps(**kw)
+
+            result = await _run_in_thread(
+                _worker,
                 tickers=tickers,
                 currency=currency,
                 mode=mode,
@@ -120,14 +165,20 @@ async def lookup_identifiers(
         Dict with "results" key: list of dicts, each containing
         input, iq_id, company_name, and status ("OK" or "FAILED").
     """
+    log.info("lookup_identifiers called: %d identifiers", len(identifiers) if identifiers else 0)
     if not identifiers:
         return {"error": "validation", "message": "No identifiers provided"}
 
+    log.info("lookup_identifiers: acquiring lock ...")
     async with _excel_lock:
+        log.info("lookup_identifiers: lock acquired, launching thread ...")
         try:
-            from capiq_mcp.id_lookup import run_id_lookup
-            result = await asyncio.to_thread(
-                run_id_lookup,
+            def _worker(**kw):
+                from capiq_mcp.id_lookup import run_id_lookup
+                return run_id_lookup(**kw)
+
+            result = await _run_in_thread(
+                _worker,
                 identifiers=identifiers,
                 max_wait=max_wait,
             )
@@ -185,6 +236,7 @@ async def pull_chart_data(
         Dict with keys: chart_path (PNG location), data (time-series per ticker),
         resolution_notes (per-ticker resolution status), chart_config.
     """
+    log.info("pull_chart_data called: %d tickers, metric_type=%s", len(tickers) if tickers else 0, metric_type)
     if not tickers:
         return {"error": "validation", "message": "No tickers provided"}
     if not metrics:
@@ -199,11 +251,16 @@ async def pull_chart_data(
         return {"error": "validation",
                 "message": "dual_axis chart requires exactly 2 metrics"}
 
+    log.info("pull_chart_data: acquiring lock ...")
     async with _excel_lock:
+        log.info("pull_chart_data: lock acquired, launching thread ...")
         try:
-            from capiq_mcp.chart_engine import run_chart
-            result = await asyncio.to_thread(
-                run_chart,
+            def _worker(**kw):
+                from capiq_mcp.chart_engine import run_chart
+                return run_chart(**kw)
+
+            result = await _run_in_thread(
+                _worker,
                 tickers=tickers,
                 metrics=metrics,
                 metric_type=metric_type,

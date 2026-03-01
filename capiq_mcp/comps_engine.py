@@ -443,6 +443,13 @@ def poll_for_completion(ws_com, num_companies: int, num_metrics: int,
     first_col = 2
     last_col = num_metrics + 1
 
+    # Primary rows are odd-indexed (rows 2, 4, 6, ...) — these have the real data.
+    # Fallback rows are even-indexed (rows 3, 5, 7, ...) — CIQRANGEA lookups that
+    # may stay #PEND indefinitely.  We exit as soon as primary rows are resolved,
+    # rather than waiting for fallback rows that may never settle.
+    primary_row_indices = list(range(0, total_rows, 2))      # 0, 2, 4, ...
+    num_primary_cells = num_companies * num_metrics
+
     while True:
         elapsed = time.monotonic() - start
         if elapsed > max_wait:
@@ -455,21 +462,24 @@ def poll_for_completion(ws_com, num_companies: int, num_metrics: int,
             ws_com.Cells(last_row, last_col),
         ).Value
 
-        pending = False
-        resolved = 0
-        for row_data in data:
-            for val in row_data:
+        # Check primary rows only for exit condition
+        primary_pending = False
+        primary_resolved = 0
+        for i in primary_row_indices:
+            for val in data[i]:
                 if isinstance(val, str) and val.upper() in ('#PEND', '#REFRESH'):
-                    pending = True
+                    primary_pending = True
                 elif val is not None and not (isinstance(val, (int, float)) and val < -2000000000):
-                    resolved += 1
+                    primary_resolved += 1
 
-        if not pending and resolved > num_formulas * 0.5:
-            log.info("Data ready: %d/%d cells resolved in %.0fs", resolved, num_formulas, elapsed)
+        if not primary_pending and primary_resolved > num_primary_cells * 0.5:
+            log.info("Data ready: %d/%d primary cells resolved in %.0fs",
+                     primary_resolved, num_primary_cells, elapsed)
             break
 
         if int(elapsed) % 15 < 5:
-            log.debug("%ds: %d/%d resolved, pending=%s", elapsed, resolved, num_formulas, pending)
+            log.debug("%ds: %d/%d primary resolved, pending=%s",
+                      elapsed, primary_resolved, num_primary_cells, primary_pending)
 
         # Pump COM message queue to prevent STA deadlocks
         import pythoncom
