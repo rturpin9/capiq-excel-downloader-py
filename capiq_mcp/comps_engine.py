@@ -471,6 +471,9 @@ def poll_for_completion(ws_com, num_companies: int, num_metrics: int,
         if int(elapsed) % 15 < 5:
             log.debug("%ds: %d/%d resolved, pending=%s", elapsed, resolved, num_formulas, pending)
 
+        # Pump COM message queue to prevent STA deadlocks
+        import pythoncom
+        pythoncom.PumpWaitingMessages()
         time.sleep(5)
 
 
@@ -537,11 +540,15 @@ def run_comps(
         ws_com = session.workbook.Sheets(1)
 
         # Trigger refresh
+        import pythoncom
+        log.info("Calling RefreshSheet...")
         try:
+            pythoncom.PumpWaitingMessages()
             excel.Run("SNLXLAddin.xla!RefreshSheet")
             log.info("RefreshSheet executed")
         except Exception as e:
             log.warning("RefreshSheet warning: %s", e)
+        pythoncom.PumpWaitingMessages()
 
         # Poll for completion
         poll_for_completion(ws_com, len(tickers), len(metrics), max_wait)

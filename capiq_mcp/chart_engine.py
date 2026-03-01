@@ -398,6 +398,7 @@ def _extract_financial_data(
 
 def _poll_chart_data(ws_com, columns: list, max_wait: float) -> None:
     """Poll data sheet until formulas resolve or timeout."""
+    import pythoncom
     log.info("Waiting for %d data columns (max %ds)...", len(columns), max_wait)
     start = time.monotonic()
 
@@ -423,6 +424,8 @@ def _poll_chart_data(ws_com, columns: list, max_wait: float) -> None:
         if int(elapsed) % 15 < 5:
             log.debug("%ds: sentinel=%r", elapsed, val)
 
+        # Pump COM message queue to prevent STA deadlocks
+        pythoncom.PumpWaitingMessages()
         time.sleep(5)
 
 
@@ -894,11 +897,14 @@ def run_chart(
         log.info("Connected to Excel %s for chart data", excel.Version)
 
         # Trigger refresh on both sheets
+        log.info("Calling RefreshWorkbook...")
         try:
+            pythoncom.PumpWaitingMessages()
             excel.Run("SNLXLAddin.xla!RefreshWorkbook")
             log.info("RefreshWorkbook executed")
         except Exception as e:
             log.warning("RefreshWorkbook warning: %s", e)
+        pythoncom.PumpWaitingMessages()
 
         # Poll Data sheet for completion
         ws_data = session.workbook.Sheets("Data")

@@ -78,11 +78,15 @@ def run_id_lookup(identifiers: list[str], max_wait: int = 60) -> dict:
         ws_com = session.workbook.Sheets(1)
 
         # Trigger refresh
+        import pythoncom
+        log.info("Calling RefreshSheet for ID lookup...")
         try:
+            pythoncom.PumpWaitingMessages()
             excel.Run("SNLXLAddin.xla!RefreshSheet")
             log.info("RefreshSheet executed for ID lookup")
         except Exception as e:
             log.warning("RefreshSheet warning: %s", e)
+        pythoncom.PumpWaitingMessages()
 
         # Poll for completion — batch read CIQRANGEA spill cells
         n = len(identifiers)
@@ -115,6 +119,8 @@ def run_id_lookup(identifiers: list[str], max_wait: int = 60) -> dict:
                 log.info("ID lookup resolved in %.0fs", elapsed)
                 break
 
+            # Pump COM message queue to prevent STA deadlocks
+            pythoncom.PumpWaitingMessages()
             time.sleep(2)
 
         # Batch read results (columns C-D)

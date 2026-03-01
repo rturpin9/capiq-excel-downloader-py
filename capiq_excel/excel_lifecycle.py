@@ -82,9 +82,14 @@ def launch_excel_isolated(
         timeout=rot_poll_timeout,
     )
 
-    # Suppress modal dialogs that would block COM calls from MCP/headless callers
+    # Suppress modal dialogs that would block COM calls from MCP/headless callers.
+    # Interactive=False prevents ALL user-facing dialogs (including add-in dialogs).
+    # DisplayAlerts=False suppresses Excel's own confirmation prompts.
+    # EnableEvents=False prevents event-driven interruptions during automation.
     try:
+        app.Interactive = False
         app.DisplayAlerts = False
+        app.EnableEvents = False
     except Exception:
         pass
 
@@ -116,6 +121,14 @@ def close_session(
     delete_workbook : bool
         Whether to delete the temp XLSX file (default True).
     """
+    # Restore Interactive mode before closing (some add-ins need it for cleanup)
+    if session.excel is not None:
+        try:
+            session.excel.Interactive = True
+            session.excel.EnableEvents = True
+        except Exception:
+            pass
+
     # Close our workbook
     if session.workbook is not None:
         try:
@@ -206,7 +219,11 @@ def _poll_rot_for_workbook(
     while time.monotonic() < deadline:
         result = _find_workbook_in_rot(workbook_name)
         if result is not None:
+            log.info("Found workbook '%s' in ROT after %.1fs",
+                     workbook_name, timeout - (deadline - time.monotonic()))
             return result
+        # Pump COM message queue to prevent STA deadlocks
+        pythoncom.PumpWaitingMessages()
         time.sleep(interval)
 
     raise TimeoutError(
@@ -266,4 +283,6 @@ def _wait_for_udfs(
             log.info("UDF ready after %.1fs", elapsed)
             return
 
+        # Pump COM message queue to prevent STA deadlocks
+        pythoncom.PumpWaitingMessages()
         time.sleep(interval)
