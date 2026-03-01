@@ -88,9 +88,15 @@ def run_id_lookup(identifiers: list[str], max_wait: int = 60) -> dict:
             log.warning("RefreshSheet warning: %s", e)
         pythoncom.PumpWaitingMessages()
 
-        # Poll for completion — batch read CIQRANGEA spill cells
+        # Poll for completion — batch read CIQRANGEA spill cells.
+        # Exit when ALL cells resolve, OR when the resolved count
+        # stabilizes (stops increasing for 3 consecutive polls),
+        # meaning remaining cells are stuck on #PEND/#ERROR.
         n = len(identifiers)
         start = time.monotonic()
+        prev_resolved = -1
+        stable_count = 0
+
         while True:
             elapsed = time.monotonic() - start
             if elapsed > max_wait:
@@ -105,19 +111,35 @@ def run_id_lookup(identifiers: list[str], max_wait: int = 60) -> dict:
                     ws_com.Cells(2, 3), ws_com.Cells(1 + n, 3)
                 ).Value
 
-            all_done = True
+            resolved = 0
+            pending = 0
             for row_tuple in spill_vals:
                 val = row_tuple[0]
                 if val is None:
-                    all_done = False
-                    break
-                if isinstance(val, str) and val.upper() in ('#PEND', '#REFRESH'):
-                    all_done = False
-                    break
+                    pending += 1
+                elif isinstance(val, str) and val.upper() in ('#PEND', '#REFRESH'):
+                    pending += 1
+                else:
+                    resolved += 1
 
-            if all_done:
-                log.info("ID lookup resolved in %.0fs", elapsed)
+            log.debug("ID lookup %ds: %d/%d resolved, %d pending",
+                      elapsed, resolved, n, pending)
+
+            if pending == 0:
+                log.info("ID lookup fully resolved in %.0fs (%d/%d)", elapsed, resolved, n)
                 break
+
+            # If resolved count hasn't changed for 3 polls (~6s), remaining
+            # cells are stuck — proceed with what we have.
+            if resolved == prev_resolved and resolved > 0:
+                stable_count += 1
+                if stable_count >= 3:
+                    log.info("ID lookup settled in %.0fs (%d/%d resolved, %d stuck)",
+                             elapsed, resolved, n, pending)
+                    break
+            else:
+                stable_count = 0
+            prev_resolved = resolved
 
             # Pump COM message queue to prevent STA deadlocks
             pythoncom.PumpWaitingMessages()
