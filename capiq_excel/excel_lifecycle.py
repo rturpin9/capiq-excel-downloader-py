@@ -19,7 +19,7 @@ import win32com.client
 
 from exceldriver.path import get_excel_path
 
-log = logging.getLogger("capiq_mcp")
+log = logging.getLogger("capiq_excel")
 
 
 @dataclass
