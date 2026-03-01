@@ -55,18 +55,22 @@ capiq_excel/                     # Core library — Excel COM automation for CIQ
     dates.py           # Date helpers (pandas freq compat: Q->QE, Y->YE)
     ext_pandas.py      # CSV append utilities, date parsing, DataFrame helpers
 
-capiq_mcp/                       # MCP server — exposes comp tables to Claude Code
+capiq_mcp/                       # MCP server — exposes comp tables + charts to Claude Code
   __init__.py
-  server.py            # FastMCP server: pull_comps + lookup_identifiers tools
+  server.py            # FastMCP server: pull_comps + pull_chart_data + lookup_identifiers tools
   comps_engine.py      # Comp table engine: builds XLSX, drives Excel, extracts results
                        #   Supports lease-adjusted / excluding-leases modes, NTM lease adj
+  chart_engine.py      # Chart engine: builds time-series workbooks, extracts data, renders
+                       #   matplotlib charts. Supports market/multiple/financial metric types,
+                       #   line/bar/line_marker/dual_axis chart types, indexed mode
   id_lookup.py         # CIQRANGEA-based identifier resolution (tickers, names, CUSIPs, ISINs)
 
 pull_comps.py                    # Standalone CLI for comp tables (thin wrapper over comps_engine)
 
 .mcp.json                       # MCP server config (python -m capiq_mcp.server)
-.claude/agents/capiq-analyst.md  # Subagent: Capital IQ analyst (comps + ID lookup)
+.claude/agents/capiq-analyst.md  # Subagent: Capital IQ analyst (comps, charts, ID lookup)
 .claude/skills/comps/SKILL.md    # /comps skill definition
+.claude/skills/chart/SKILL.md    # /chart skill definition
 ```
 
 ### Data Flow
@@ -195,7 +199,10 @@ python pull_comps.py DSGX ROP MANH --currency USD --mode excluding-leases
 - **CRITICAL**: Excel must be launched via subprocess (not `Dispatch()`) for UDFs to register — use `exceldriver._start_excel_with_addins_and_attach()`
 - In Pro CIQ compat mode: `CIQ()`, `CIQRANGE()`, `CIQRANGEV()`, and `CIQRANGEA()` all work
 - `CIQRANGEA()` in Pro compat: formula cell shows function name as string, but result spills into adjacent cell to the right — use blank-column layout
-- CIQ builder uses `=CIQRANGEA(search,"IQ_COMPANY_ID_QUICK_MATCH",1,1)` for ID lookup (handles tickers, names, CUSIPs, ISINs)
+- CIQ builder uses `=CIQRANGEA(search,"IQ_COMPANY_ID_QUICK_MATCH",1,1)` for ID lookup — **fuzzy match, use only as fallback**
+- **`IQ_COMPANY_ID_QUICK_MATCH` does NOT accept `EXCHANGE:TICKER` format** (e.g. `TSX:CSU` fails, `CSU` works) — strip exchange prefix before passing. This applies to both CIQRANGE and CIQRANGEA (they resolve identically, only output direction differs).
+- `EXCHANGE:TICKER` format IS accepted as direct input to CIQRANGE/CIQRANGEA/CIQRANGEV for financial and market data formulas — no ID resolution needed
+- **Quick match is fuzzy** — returns closest match, which may not be the intended company in edge cases. Use only as fallback when tickers aren't found. Prefer precise identifiers (exact ticker, CUSIP, ISIN) and verify the resolved company name matches expectations.
 - `CIQ()` only resolves tickers and IQ IDs — does NOT resolve company names, CUSIPs, or ISINs
 - SPG ID lookup uses different identifier namespace (returns SPG-internal IDs, not IQ IDs) — not compatible with CIQ formulas
 - CIQ compat registry: `DisableCIQUDF = 0` means CIQ is ENABLED (inverted logic)
@@ -207,6 +214,7 @@ python pull_comps.py DSGX ROP MANH --currency USD --mode excluding-leases
 - Working example scripts: `comp_table.py` (single-value CIQ), `ev_multiples_chart.py` (CIQRANGEV time series), `indexed_equity_chart.py` (CIQRANGE market data)
 - `MetricType` enum replaces stringly-typed `metric_type` field — use `MetricType.FINANCIAL`, `.MARKET`, `.OWNERSHIP`, `.ESTIMATES`, `.ID_LOOKUP`
 - `extract.py` uses batch COM reads (`Range().Value`) instead of cell-by-cell — orders of magnitude faster for large datasets
-- MCP server (`capiq_mcp/`) exposes `pull_comps` and `lookup_identifiers` tools to Claude Code
-- MCP config lives in `.mcp.json`; subagent in `.claude/agents/capiq-analyst.md`; skill in `.claude/skills/comps/SKILL.md`
+- MCP server (`capiq_mcp/`) exposes `pull_comps`, `pull_chart_data`, and `lookup_identifiers` tools to Claude Code
+- `pull_chart_data` supports three metric types: `market` (CIQRANGE date range), `multiple` (CIQRANGEV period+range), `financial` (CIQRANGE period offset) — and four chart types: `line`, `bar`, `line_marker`, `dual_axis`
+- MCP config lives in `.mcp.json`; subagent in `.claude/agents/capiq-analyst.md`; skills in `.claude/skills/comps/SKILL.md` and `.claude/skills/chart/SKILL.md`
 - `excel_lifecycle.py` is shared infrastructure used by both `capiq_mcp` and `capiq_excel` — logger is `capiq_excel`

@@ -34,9 +34,11 @@ def build_id_workbook(path: str, identifiers: list[str]) -> None:
 
     for idx, ident in enumerate(identifiers):
         row = idx + 2
+        # CIQRANGEA doesn't handle EXCHANGE:TICKER format — strip prefix
+        lookup_id = ident.split(":", 1)[1] if ":" in ident else ident
         ws.cell(row=row, column=1, value=ident)
         ws.cell(row=row, column=2,
-                value=f'=CIQRANGEA("{ident}","IQ_COMPANY_ID_QUICK_MATCH",1,1)')
+                value=f'=CIQRANGEA("{lookup_id}","IQ_COMPANY_ID_QUICK_MATCH",1,1)')
         # Col C is blank — CIQRANGEA result spills here
         # Company name from resolved IQ ID (references spill cell)
         ws.cell(row=row, column=4,

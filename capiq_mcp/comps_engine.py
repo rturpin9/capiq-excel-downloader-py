@@ -148,8 +148,10 @@ def build_workbook(path: str, tickers: list[str], metrics: list,
             ws.cell(row=primary_row, column=col_idx, value=formula)
 
         # CIQRANGEA lookup on primary row
+        # CIQRANGEA doesn't handle EXCHANGE:TICKER format — strip prefix
+        lookup_id = ticker.split(":", 1)[1] if ":" in ticker else ticker
         ws.cell(row=primary_row, column=ciqrangea_col,
-                value=f'=CIQRANGEA("{ticker}","IQ_COMPANY_ID_QUICK_MATCH",1,1)')
+                value=f'=CIQRANGEA("{lookup_id}","IQ_COMPANY_ID_QUICK_MATCH",1,1)')
 
         # Fallback row: SPG formulas referencing the CIQRANGEA spill cell
         fallback_row = primary_row + 1
