@@ -12,7 +12,7 @@ Python tool that drives Microsoft Excel via COM automation to download data from
 ### Package Structure
 
 ```
-capiq_excel/
+capiq_excel/                     # Core library — Excel COM automation for CIQ data
   __init__.py          # Public API: download_data, download_data_for_capiq_ids,
                        #   CapiqConfig, FormulaDialect, AddinMode, get_builder, QuerySpec
   main.py              # Orchestrator: create XLSX -> populate via Excel COM -> combine to CSV
@@ -21,6 +21,8 @@ capiq_excel/
   config.py            # CapiqConfig, FormulaDialect/AddinMode/RefreshScope/MetricType enums,
                        #   FormulaOptions with to_spg_options_string()
   cli.py               # CLI entry: capiq status|detect-addins|download|doctor
+  excel_lifecycle.py   # launch_excel_isolated() / close_session() — safe non-destructive
+                       #   COM sessions via subprocess + ROT detection
   exceptions.py        # Exception classes (legacy + new taxonomy)
   ids.py               # ID resolution: arbitrary IDs -> CIQ IDs (builder-aware)
   fileops.py           # Failed-file management (move to failed folder)
@@ -52,6 +54,19 @@ capiq_excel/
   tools/
     dates.py           # Date helpers (pandas freq compat: Q->QE, Y->YE)
     ext_pandas.py      # CSV append utilities, date parsing, DataFrame helpers
+
+capiq_mcp/                       # MCP server — exposes comp tables to Claude Code
+  __init__.py
+  server.py            # FastMCP server: pull_comps + lookup_identifiers tools
+  comps_engine.py      # Comp table engine: builds XLSX, drives Excel, extracts results
+                       #   Supports lease-adjusted / excluding-leases modes, NTM lease adj
+  id_lookup.py         # CIQRANGEA-based identifier resolution (tickers, names, CUSIPs, ISINs)
+
+pull_comps.py                    # Standalone CLI for comp tables (thin wrapper over comps_engine)
+
+.mcp.json                       # MCP server config (python -m capiq_mcp.server)
+.claude/agents/capiq-analyst.md  # Subagent: Capital IQ analyst (comps + ID lookup)
+.claude/skills/comps/SKILL.md    # /comps skill definition
 ```
 
 ### Data Flow
@@ -132,6 +147,7 @@ capiq_excel/
 - `openpyxl` - XLSX creation
 - `pandas` - Data manipulation
 - `xlrd` - Legacy Excel reading
+- `mcp[cli]` / `fastmcp` - MCP server framework (for `capiq_mcp`)
 
 ## Conventions
 
@@ -157,6 +173,12 @@ capiq status          # Show config from env vars
 capiq detect-addins   # Start Excel, detect installed add-ins
 capiq download --ids MSFT AAPL --financial-items IQ_TOTAL_REV --dialect spg
 capiq doctor          # Check environment health
+
+# MCP server (started automatically by Claude Code via .mcp.json)
+python -m capiq_mcp.server
+
+# Standalone comp table CLI
+python pull_comps.py DSGX ROP MANH --currency USD --mode excluding-leases
 ```
 
 ## Key Notes
@@ -185,3 +207,6 @@ capiq doctor          # Check environment health
 - Working example scripts: `comp_table.py` (single-value CIQ), `ev_multiples_chart.py` (CIQRANGEV time series), `indexed_equity_chart.py` (CIQRANGE market data)
 - `MetricType` enum replaces stringly-typed `metric_type` field — use `MetricType.FINANCIAL`, `.MARKET`, `.OWNERSHIP`, `.ESTIMATES`, `.ID_LOOKUP`
 - `extract.py` uses batch COM reads (`Range().Value`) instead of cell-by-cell — orders of magnitude faster for large datasets
+- MCP server (`capiq_mcp/`) exposes `pull_comps` and `lookup_identifiers` tools to Claude Code
+- MCP config lives in `.mcp.json`; subagent in `.claude/agents/capiq-analyst.md`; skill in `.claude/skills/comps/SKILL.md`
+- `excel_lifecycle.py` is shared infrastructure used by both `capiq_mcp` and `capiq_excel` — logger is `capiq_excel`

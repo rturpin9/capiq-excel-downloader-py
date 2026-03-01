@@ -50,8 +50,11 @@ Example Agent tool call:
 
 ```
 subagent_type: "capiq-analyst"
+model: "haiku"
 prompt: "Pull a comp table for the following tickers: NYSE:HAL, NYSE:SLB, TSX:PD, TSX:TCW. Currency: CAD, mode: lease-adjusted, NTM lease adjustment: ON. Format as a markdown table with summary statistics."
 ```
+
+**IMPORTANT:** Always pass `model: "haiku"` when spawning the subagent. The task is formulaic (one MCP call + table formatting) and runtime is dominated by Excel COM, not LLM reasoning.
 
 The subagent will:
 1. Call `mcp__capiq__pull_comps` with the tickers and parameters
