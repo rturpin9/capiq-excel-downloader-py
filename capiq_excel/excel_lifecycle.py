@@ -12,10 +12,14 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+import logging
+
 import pythoncom
 import win32com.client
 
 from exceldriver.path import get_excel_path
+
+log = logging.getLogger("capiq_mcp")
 
 
 @dataclass
@@ -234,7 +238,7 @@ def _wait_for_udfs(
         if elapsed > timeout:
             # Don't raise — proceed anyway; formulas may still work
             # once RefreshSheet is called
-            print(f"  UDF readiness: timeout after {timeout:.0f}s, proceeding anyway")
+            log.info("UDF readiness: timeout after %.0fs, proceeding anyway", timeout)
             return
 
         for probe in probes:
@@ -253,7 +257,7 @@ def _wait_for_udfs(
 
             # Any other result (string, number, or a different COM error)
             # means the UDF is callable — add-in is ready
-            print(f"  UDF ready after {elapsed:.1f}s")
+            log.info("UDF ready after %.1fs", elapsed)
             return
 
         time.sleep(interval)

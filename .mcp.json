@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "capiq": {
+      "command": "python",
+      "args": ["-m", "capiq_mcp.server"],
+      "cwd": "C:\\Claude"
+    }
+  }
+}
