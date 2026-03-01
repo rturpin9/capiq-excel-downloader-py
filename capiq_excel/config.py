@@ -39,6 +39,15 @@ class RefreshScope(Enum):
     SELECTION = "selection"
 
 
+class MetricType(Enum):
+    """Category of data being queried — determines formula structure."""
+    FINANCIAL = "financial"
+    MARKET = "market"
+    OWNERSHIP = "ownership"
+    ESTIMATES = "estimates"
+    ID_LOOKUP = "id_lookup"
+
+
 @dataclass
 class FormulaOptions:
     """Default options applied to generated formulas.
@@ -74,6 +83,26 @@ class FormulaOptions:
         return ",".join(parts) if parts else None
 
 
+def _safe_enum(enum_cls, env_var: str, default):
+    """Parse an environment variable as an enum value, falling back to default."""
+    raw = os.environ.get(env_var, default.value).lower()
+    try:
+        return enum_cls(raw)
+    except ValueError:
+        print(f'Warning: Invalid {env_var} "{raw}", defaulting to "{default.value}"')
+        return default
+
+
+def _safe_int(env_var: str, default: int) -> int:
+    """Parse an environment variable as an integer, falling back to default."""
+    raw = os.environ.get(env_var, str(default))
+    try:
+        return int(raw)
+    except ValueError:
+        print(f'Warning: Invalid {env_var} "{raw}", defaulting to {default}')
+        return default
+
+
 @dataclass
 class RetryConfig:
     """Retry and timeout parameters."""
@@ -103,38 +132,10 @@ class CapiqConfig:
     @classmethod
     def from_env(cls) -> CapiqConfig:
         """Build config from environment variables, falling back to defaults."""
-        dialect_str = os.environ.get("CAPIQ_FORMULA_DIALECT", "auto").lower()
-        mode_str = os.environ.get("CAPIQ_ADDIN_MODE", "auto").lower()
-        scope_str = os.environ.get("CAPIQ_REFRESH_SCOPE", "worksheet").lower()
-
-        try:
-            dialect = FormulaDialect(dialect_str)
-        except ValueError:
-            print(f'Warning: Invalid CAPIQ_FORMULA_DIALECT "{dialect_str}", defaulting to "auto"')
-            dialect = FormulaDialect.AUTO
-        try:
-            mode = AddinMode(mode_str)
-        except ValueError:
-            print(f'Warning: Invalid CAPIQ_ADDIN_MODE "{mode_str}", defaulting to "auto"')
-            mode = AddinMode.AUTO
-        try:
-            scope = RefreshScope(scope_str)
-        except ValueError:
-            print(f'Warning: Invalid CAPIQ_REFRESH_SCOPE "{scope_str}", defaulting to "worksheet"')
-            scope = RefreshScope.WORKSHEET
-
-        def _safe_int(env_var: str, default: int) -> int:
-            raw = os.environ.get(env_var, str(default))
-            try:
-                return int(raw)
-            except ValueError:
-                print(f'Warning: Invalid {env_var} "{raw}", defaulting to {default}')
-                return default
-
         return cls(
-            formula_dialect=dialect,
-            addin_mode=mode,
-            refresh_scope=scope,
+            formula_dialect=_safe_enum(FormulaDialect, "CAPIQ_FORMULA_DIALECT", FormulaDialect.AUTO),
+            addin_mode=_safe_enum(AddinMode, "CAPIQ_ADDIN_MODE", AddinMode.AUTO),
+            refresh_scope=_safe_enum(RefreshScope, "CAPIQ_REFRESH_SCOPE", RefreshScope.WORKSHEET),
             freq=os.environ.get("CAPIQ_FREQ", "Q"),
             num_periods=_safe_int("CAPIQ_NUM_PERIODS", 80),
             retry=RetryConfig(

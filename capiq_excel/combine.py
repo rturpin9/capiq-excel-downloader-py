@@ -2,11 +2,9 @@ import os
 import re
 import tempfile
 import math
-import traceback
-
 import pandas as pd
 
-from capiq_excel.tools.ext_pandas import _get_outpath_and_df_of_headers, _append_df_to_csv, append_csv_to_csv
+from capiq_excel.tools.ext_pandas import _get_outpath_and_df_of_headers, _append_df_to_csv
 from processfiles.files import FileProcessTracker
 
 
@@ -14,7 +12,7 @@ def combine_all_capiq_xlsx(infolder, outpath, restart=True, num_parts=100):
 
     file_tracker = FileProcessTracker(folder=infolder, restart=restart, file_types=('xlsx',))
     outpath, df_of_headers = _get_outpath_and_df_of_headers(outpath)
-    all_columns = [col for col in df_of_headers.columns]
+    all_columns = list(df_of_headers.columns)
 
     # TODO: cleanup
     # Set up appending to many files to speed up process. Then the part files will be combined at the end
@@ -34,7 +32,7 @@ def combine_all_capiq_xlsx(infolder, outpath, restart=True, num_parts=100):
         print(f'Running second pass of append. Using in part files to create output file {outpath}.')
         file_tracker = FileProcessTracker(folder=temp_dir, restart=True, file_types=('csv',))
         outpath, df_of_headers = _get_outpath_and_df_of_headers(outpath)
-        all_columns = [col for col in df_of_headers.columns]
+        all_columns = list(df_of_headers.columns)
         for file in file_tracker.file_generator():
             df_for_append = pd.read_csv(file)  # load new data
             df_of_headers, all_columns = _append_df_to_csv(df_for_append, df_of_headers, outpath, all_columns)

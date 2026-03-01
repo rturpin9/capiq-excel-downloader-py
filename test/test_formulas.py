@@ -1,6 +1,6 @@
 """Snapshot tests for formula generation across all dialects."""
 import pytest
-from capiq_excel.config import FormulaOptions
+from capiq_excel.config import FormulaOptions, MetricType
 from capiq_excel.formulas.base import QuerySpec
 from capiq_excel.formulas.ciq_builder import CiqBuilder
 from capiq_excel.formulas.spg_builder import SpgBuilder
@@ -31,7 +31,7 @@ class TestCiqBuilderFinancial:
         spec = QuerySpec(
             identifiers=["IQ21835"],
             metric="IQ_TOTAL_REV",
-            metric_type="financial",
+            metric_type=MetricType.FINANCIAL,
             frequency="Q",
             num_periods=80,
             label="Sales",
@@ -43,7 +43,7 @@ class TestCiqBuilderFinancial:
         spec = QuerySpec(
             identifiers=["IQ21835"],
             metric="IQ_TOTAL_REV",
-            metric_type="financial",
+            metric_type=MetricType.FINANCIAL,
             frequency="Y",
             num_periods=20,
         )
@@ -54,7 +54,7 @@ class TestCiqBuilderFinancial:
         spec = QuerySpec(
             identifiers=["IQ21835"],
             metric="IQ_COST_REV",
-            metric_type="financial",
+            metric_type=MetricType.FINANCIAL,
         )
         result = ciq.build_range(spec)
         assert '"IQ_COST_REV")' in result
@@ -65,7 +65,7 @@ class TestCiqBuilderMarket:
         spec = QuerySpec(
             identifiers=["IQ21835"],
             metric="IQ_FLOAT_PERCENT",
-            metric_type="market",
+            metric_type=MetricType.MARKET,
             begin_date="01/01/2020",
             end_date="12/31/2024",
             label="Float %",
@@ -77,11 +77,11 @@ class TestCiqBuilderMarket:
 class TestCiqBuilderIdLookup:
     def test_id_lookup(self, ciq):
         result = ciq.build_identifier_lookup("MSFT")
-        assert result == '=CIQ("MSFT","IQ_COMPANY_ID")'
+        assert result == '=CIQRANGEA("MSFT","IQ_COMPANY_ID_QUICK_MATCH",1,1)'
 
     def test_name_lookup(self, ciq):
         result = ciq.build_identifier_lookup("AAPL", "IQ_COMPANY_NAME_QUICK_MATCH")
-        assert result == '=CIQ("AAPL","IQ_COMPANY_NAME")'
+        assert result == '=CIQRANGEA("AAPL","IQ_COMPANY_NAME_QUICK_MATCH",1,1)'
 
 
 class TestCiqBuilderTable:
@@ -89,7 +89,7 @@ class TestCiqBuilderTable:
         spec = QuerySpec(
             identifiers=["IQ21835"],
             metric="IQ_TOTAL_REV",
-            metric_type="financial",
+            metric_type=MetricType.FINANCIAL,
             frequency="Q",
             num_periods=80,
             label="Sales",
@@ -129,7 +129,7 @@ class TestSpgBuilderRange:
         spec = QuerySpec(
             identifiers=["IQ21835"],
             metric="IQ_TOTAL_REV",
-            metric_type="financial",
+            metric_type=MetricType.FINANCIAL,
             frequency="Q",
             num_periods=80,
         )
@@ -143,7 +143,7 @@ class TestSpgBuilderRange:
         spec = QuerySpec(
             identifiers=["IQ21835"],
             metric="IQ_TOTAL_REV",
-            metric_type="financial",
+            metric_type=MetricType.FINANCIAL,
             frequency="Y",
             num_periods=20,
         )
@@ -251,7 +251,7 @@ class TestSnlBuilderRange:
         spec = QuerySpec(
             identifiers=["SPGI"],
             metric="SNL_CLOSE_PRICE",
-            metric_type="market",
+            metric_type=MetricType.MARKET,
             begin_date="01/01/2020",
             end_date="12/31/2024",
         )
@@ -264,7 +264,7 @@ class TestSnlBuilderRange:
         spec = QuerySpec(
             identifiers=["4023623"],
             metric="SNL_TOTAL_ASSETS",
-            metric_type="financial",
+            metric_type=MetricType.FINANCIAL,
             dataset=1,
             secondary_key="MRY",
         )
@@ -336,7 +336,7 @@ class TestDialectParity:
         spec = QuerySpec(
             identifiers=["IQ21835"],
             metric="IQ_TOTAL_REV",
-            metric_type="financial",
+            metric_type=MetricType.FINANCIAL,
             frequency="Q",
             num_periods=10,
             label="Revenue",

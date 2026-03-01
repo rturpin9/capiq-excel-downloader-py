@@ -1,6 +1,5 @@
 from typing import Sequence, Dict, Iterable, Callable, Optional
 import os
-import string
 import itertools
 import math
 import pandas as pd
@@ -21,7 +20,7 @@ def create_all_xlsx_with_commands(folder: str, company_id_list: Sequence[str],
                                   market_data_items_dict: Dict[str, str],
                                   builder: Optional[DialectBuilder] = None,
                                   **financials_kwargs):
-    [
+    for company_id in company_id_list:
         create_xlsx_with_commands(
             folder,
             company_id,
@@ -30,8 +29,6 @@ def create_all_xlsx_with_commands(folder: str, company_id_list: Sequence[str],
             builder=builder,
             **financials_kwargs
         )
-        for company_id in company_id_list
-    ]
 
 
 def create_xlsx_with_commands(folder: str, company_id: str, financial_data_items_dict: Dict[str, str],
@@ -42,8 +39,7 @@ def create_xlsx_with_commands(folder: str, company_id: str, financial_data_items
     _fill_with_commands(ws, company_id, financial_data_items_dict, market_data_items_dict,
                         builder=builder, **financials_kwargs)
 
-    if not os.path.exists(folder):
-        os.makedirs(folder)
+    os.makedirs(folder, exist_ok=True)
 
     filepath = os.path.join(folder, f'{company_id}.xlsx')
     wb.save(filepath)
@@ -52,10 +48,8 @@ def create_xlsx_with_commands(folder: str, company_id: str, financial_data_items
 
 def create_all_xlsx_with_holdings_commands(folder, company_id_list, date_str_list, data_items_dict,
                                            builder: Optional[DialectBuilder] = None):
-    [
+    for company_id, date_str in itertools.product(company_id_list, date_str_list):
         create_xlsx_with_holdings_commands(folder, company_id, date_str, data_items_dict, builder=builder)
-        for company_id, date_str in itertools.product(company_id_list, date_str_list)
-    ]
 
 
 def create_xlsx_with_holdings_commands(folder, company_id, date_str, data_items_dict,
@@ -72,8 +66,7 @@ def create_all_xlsx_with_id_commands(ids: Sequence[str], folder, num_files=100,
                                      builder: Optional[DialectBuilder] = None):
     wb, ws = get_workbook_and_worksheet()
 
-    if not os.path.exists(folder):
-        os.makedirs(folder)
+    os.makedirs(folder, exist_ok=True)
 
     df = pd.DataFrame()
     _fill_id_column(df, ids)
@@ -116,13 +109,10 @@ def _fill_capiq_id_column(df, builder: Optional[DialectBuilder] = None):
     """
     id_cmd = make_id_command(builder) if builder is not None else id_command
 
-    if builder is not None:
-        # Builder-based: CIQ() returns value in-cell (no right-expansion)
-        df['IQID'] = df['ID'].apply(id_cmd)
-    else:
-        # Legacy: CIQRANGEA expands one column to the right
-        df['Blank 1'] = df['ID'].apply(id_cmd)
-        df['IQID'] = ''
+    # CIQRANGEA expands one column to the right — formula goes in Blank,
+    # resolved value spills into IQID
+    df['Blank 1'] = df['ID'].apply(id_cmd)
+    df['IQID'] = ''
 
 
 def _fill_capiq_name_column(df, builder: Optional[DialectBuilder] = None):
@@ -131,13 +121,10 @@ def _fill_capiq_name_column(df, builder: Optional[DialectBuilder] = None):
     """
     name_cmd = make_name_command(builder) if builder is not None else name_command
 
-    if builder is not None:
-        # Builder-based: CIQ() returns value in-cell (no right-expansion)
-        df['IQ Name'] = df['ID'].apply(name_cmd)
-    else:
-        # Legacy: CIQRANGEA expands one column to the right
-        df['Blank 2'] = df['ID'].apply(name_cmd)
-        df['IQ Name'] = ''
+    # CIQRANGEA expands one column to the right — formula goes in Blank,
+    # resolved value spills into IQ Name
+    df['Blank 2'] = df['ID'].apply(name_cmd)
+    df['IQ Name'] = ''
 
 def _fill_with_commands(ws, company_id: str, financial_data_items_dict: Dict[str, str],
                         market_data_items_dict: Dict[str, str],

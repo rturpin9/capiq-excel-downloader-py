@@ -20,7 +20,7 @@ def _ciq_not_working(excel):
     if a1 is None:
         return True  # should always have something in A1
     error_values = ('refresh', 'ciqinactive', 'error')
-    return any([value in a1.lower() for value in error_values])
+    return any(value in a1.lower() for value in error_values)
 
 
 def _data_in_a2(excel):

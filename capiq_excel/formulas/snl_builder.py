@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from capiq_excel.config import MetricType
 from capiq_excel.formulas.base import DialectBuilder, QuerySpec
 
 
@@ -27,8 +28,7 @@ class SnlBuilder(DialectBuilder):
 
     def build_single_value(self, spec: QuerySpec) -> str:
         """=SNLData(DataSet, SNLID, FieldID, SecondaryKey, TertiaryKey, Options)"""
-        if not spec.identifiers:
-            raise ValueError("QuerySpec.identifiers must not be empty")
+        self._validate_spec(spec)
         dataset = spec.dataset or 1
         identifier = spec.identifiers[0]
         secondary = spec.secondary_key or ""
@@ -58,9 +58,8 @@ class SnlBuilder(DialectBuilder):
         SNLMarkets is specifically for market/pricing data with date ranges.
         For non-market data, falls back to SNLData.
         """
-        if not spec.identifiers:
-            raise ValueError("QuerySpec.identifiers must not be empty")
-        if spec.metric_type != "market":
+        self._validate_spec(spec)
+        if spec.metric_type != MetricType.MARKET:
             return self.build_single_value(spec)
 
         identifier = spec.identifiers[0]
@@ -103,8 +102,7 @@ class SnlBuilder(DialectBuilder):
         In real use, ID/Field/Key ranges are cell references. For formula
         generation we emit literal values.
         """
-        if not spec.identifiers:
-            raise ValueError("QuerySpec.identifiers must not be empty")
+        self._validate_spec(spec)
         dataset = spec.dataset or 1
         identifier = spec.identifiers[0]
         secondary = spec.secondary_key or ""

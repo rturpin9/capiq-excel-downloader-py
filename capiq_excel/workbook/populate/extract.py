@@ -8,6 +8,7 @@ CIQ_MARKET_ITEM_FORMULA_PATTERN = re.compile(r'=CIQ\("[\w]+", "[\w]+", "([\w\/]+
 
 
 def extract_capiq_df_from_sheet(ws, market_data_items):
+    market_values = set(market_data_items.values())
     col_gen = excel_cols()
 
     all_series = []
@@ -15,16 +16,13 @@ def extract_capiq_df_from_sheet(ws, market_data_items):
         col = next(col_gen)
         if col == 'A':
             continue  # A is date column, don't need to extract
-        cell_range = f'{col}1'
-        value = ws.Range(cell_range).Value
-        if value is None:
+        header = ws.Range(f'{col}1').Value
+        if header is None:
             # Blank column label, data is finished
             break
-        if value in market_data_items.values():
-            # Market data item, need to extract data
+        if header in market_values:
             all_series.append(get_series_from_ciq_market_item_col(ws, col))
         else:
-            # Financial data item, need to extract data
             all_series.append(get_series_from_ciq_financial_col(ws, col))
 
     df = pd.concat(all_series, axis=1)
@@ -32,48 +30,67 @@ def extract_capiq_df_from_sheet(ws, market_data_items):
     return df
 
 
-_MAX_ROWS = 100_000
+# xlUp constant for End() method
+_XL_UP = -4162
+
+
+def _find_last_row(ws, col: str) -> int:
+    """Find the last non-empty row in a column using Excel's End(xlUp)."""
+    return ws.Cells(ws.Rows.Count, col).End(_XL_UP).Row
 
 
 def get_series_from_ciq_market_item_col(ws, col: str):
-    series = pd.Series()
-    row = 2
-    while row - 2 < _MAX_ROWS:
-        cell_range = f'{col}{row}'
-        value = ws.Range(cell_range).Value
-        if value is None:
+    name = ws.Range(f'{col}1').Value
+    last_row = _find_last_row(ws, col)
+    if last_row < 2:
+        series = pd.Series(name=name, dtype=float)
+        series.index = pd.to_datetime(series.index)
+        return series
+
+    # Batch read values and formulas in 2 COM calls instead of 2*N
+    values = ws.Range(f'{col}2:{col}{last_row}').Value
+    formulas = ws.Range(f'{col}2:{col}{last_row}').Formula
+
+    data = {}
+    for val_tuple, formula_tuple in zip(values, formulas):
+        val = val_tuple[0] if isinstance(val_tuple, tuple) else val_tuple
+        formula = formula_tuple[0] if isinstance(formula_tuple, tuple) else formula_tuple
+        if val is None:
             break
-        formula = ws.Range(cell_range).Formula
         date = get_date_from_ciq_market_item_formula(formula)
-        series[date] = value
-        row += 1
-    series.name = ws.Range(f'{col}1').Value
+        data[date] = val
+
+    series = pd.Series(data, name=name)
     series.index = pd.to_datetime(series.index)
     return series
 
 
 def get_series_from_ciq_financial_col(ws, col: str):
-    series = pd.Series()
-    row = 2
-    while row - 2 < _MAX_ROWS:
-        cell_range = f'{col}{row}'
-        value = ws.Range(cell_range).Value
-        if value is None:
+    name = ws.Range(f'{col}1').Value
+    last_row = _find_last_row(ws, col)
+    if last_row < 2:
+        series = pd.Series(name=name, dtype=float)
+        series.index = pd.to_datetime(series.index)
+        return series
+
+    # Batch read data column and date column A in 2 COM calls instead of 2*N
+    values = ws.Range(f'{col}2:{col}{last_row}').Value
+    dates = ws.Range(f'A2:A{last_row}').Value
+
+    data = {}
+    for val_tuple, date_tuple in zip(values, dates):
+        val = val_tuple[0] if isinstance(val_tuple, tuple) else val_tuple
+        if val is None:
             break
-        # Column A has dates
-        date = ws.Range(f'A{row}').Value
+        date = date_tuple[0] if isinstance(date_tuple, tuple) else date_tuple
         if isinstance(date, str):
-            # Handle CapIQ missing representation
             if date == 'NA':
                 date = np.nan
-            # Allow other strs to pass through
         else:
-            # TODO: add check for pycom datetime object type
-            # Extract date str from pycom datetime object
             date = str(date.date())
-        series[date] = value
-        row += 1
-    series.name = ws.Range(f'{col}1').Value
+        data[date] = val
+
+    series = pd.Series(data, name=name)
     series.index = pd.to_datetime(series.index)
     return series
 

@@ -33,8 +33,6 @@ def _resolve_config_dialect(config: CapiqConfig) -> CapiqConfig:
         print(f'  Add-in mode: {profile.addin_mode}')
         excel.Quit()
     except Exception as e:
-        import warnings
-        warnings.warn(f'Runtime detection failed ({e}), defaulting to CIQ dialect')
         print(f'  WARNING: Runtime detection failed ({e}), defaulting to CIQ')
 
     resolved = copy.copy(config)

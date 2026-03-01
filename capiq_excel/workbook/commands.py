@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from capiq_excel.config import MetricType
 from capiq_excel.formulas.base import DialectBuilder, QuerySpec
 from capiq_excel.tools.dates import freq_and_periods_to_begin_date_str, today_as_str
 
@@ -26,7 +27,7 @@ def make_financial_command(builder: DialectBuilder):
         spec = QuerySpec(
             identifiers=[company_id],
             metric=data_item,
-            metric_type="financial",
+            metric_type=MetricType.FINANCIAL,
             frequency=freq,
             num_periods=num_periods,
             label=data_item_label,
@@ -42,7 +43,7 @@ def make_market_command(builder: DialectBuilder):
         spec = QuerySpec(
             identifiers=[company_id],
             metric=data_item,
-            metric_type="market",
+            metric_type=MetricType.MARKET,
             frequency=freq,
             num_periods=num_periods,
             label=data_item_label,
@@ -58,7 +59,7 @@ def make_holdings_command(builder: DialectBuilder):
         spec = QuerySpec(
             identifiers=[company_id],
             metric=data_item,
-            metric_type="ownership",
+            metric_type=MetricType.OWNERSHIP,
             begin_date=date_str,
             label=data_item_label,
         )
@@ -145,10 +146,10 @@ def id_command(search_str):
 def name_command(search_str):
     return f'=CIQRANGEA("{search_str}","IQ_COMPANY_NAME_QUICK_MATCH",1,1)'
 
-def _validate_financial_data_inputs(*args, **kwargs):
-    if kwargs.get('freq') not in ('Q', 'Y'):
-        raise ValueError(f"freq must be 'Q' or 'Y', got {kwargs.get('freq')!r}")
-    if not isinstance(args[0], str):
-        raise TypeError(f"company_id must be str, got {type(args[0]).__name__}")
-    if not isinstance(args[1], str):
-        raise TypeError(f"data_item must be str, got {type(args[1]).__name__}")
+def _validate_financial_data_inputs(company_id, data_item, freq='Q', **kwargs):
+    if freq not in ('Q', 'Y'):
+        raise ValueError(f"freq must be 'Q' or 'Y', got {freq!r}")
+    if not isinstance(company_id, str):
+        raise TypeError(f"company_id must be str, got {type(company_id).__name__}")
+    if not isinstance(data_item, str):
+        raise TypeError(f"data_item must be str, got {type(data_item).__name__}")

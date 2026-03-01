@@ -35,8 +35,7 @@ class SpgBuilder(DialectBuilder):
 
     def build_single_value(self, spec: QuerySpec) -> str:
         """=SPG(Identifier, Metric, Period, AsOfDate, Options)"""
-        if not spec.identifiers:
-            raise ValueError("QuerySpec.identifiers must not be empty")
+        self._validate_spec(spec)
         identifier = spec.identifiers[0]
         period = spec.period or _default_relative_period(spec.frequency)
         opts = spec.options.to_spg_options_string()
@@ -55,8 +54,7 @@ class SpgBuilder(DialectBuilder):
 
     def build_range(self, spec: QuerySpec) -> str:
         """=SPGRangeV(Identifier, Metric, BeginPeriod, EndPeriod, Options)"""
-        if not spec.identifiers:
-            raise ValueError("QuerySpec.identifiers must not be empty")
+        self._validate_spec(spec)
         identifier = spec.identifiers[0]
         opts = spec.options.to_spg_options_string()
 
@@ -82,8 +80,7 @@ class SpgBuilder(DialectBuilder):
         metrics, and periods are typically cell references in real use.
         For formula generation, we emit the literal values.
         """
-        if not spec.identifiers:
-            raise ValueError("QuerySpec.identifiers must not be empty")
+        self._validate_spec(spec)
         identifier = spec.identifiers[0]
         period = spec.period or _default_relative_period(spec.frequency)
         opts = spec.options.to_spg_options_string()

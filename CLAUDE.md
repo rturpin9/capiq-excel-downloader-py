@@ -18,7 +18,7 @@ capiq_excel/
   main.py              # Orchestrator: create XLSX -> populate via Excel COM -> combine to CSV
                        #   Accepts optional CapiqConfig for dialect/mode selection
   addin.py             # load_capiq(legacy) + load_capiq_addin(detect runtime, load best)
-  config.py            # CapiqConfig, FormulaDialect/AddinMode/RefreshScope enums,
+  config.py            # CapiqConfig, FormulaDialect/AddinMode/RefreshScope/MetricType enums,
                        #   FormulaOptions with to_spg_options_string()
   cli.py               # CLI entry: capiq status|detect-addins|download|doctor
   exceptions.py        # Exception classes (legacy + new taxonomy)
@@ -31,7 +31,7 @@ capiq_excel/
   formulas/
     __init__.py        # get_builder(dialect) factory
     base.py            # QuerySpec (canonical query), DialectBuilder ABC
-    ciq_builder.py     # CiqBuilder: CIQ(), CIQRANGE() (ID lookup via CIQ)
+    ciq_builder.py     # CiqBuilder: CIQ(), CIQRANGE(), CIQRANGEA() for ID lookup
     spg_builder.py     # SpgBuilder: SPG(), SPGRangeV(), SPGTable()
     snl_builder.py     # SnlBuilder: SNLData(), SNLMarkets(), SNLTable(),
                        #   SNLQuery(), SNLDefinition(), SNLConvert()
@@ -49,7 +49,6 @@ capiq_excel/
   downloader/
     tools.py           # Batch file processing with retry/timeout/Excel restart
                        #   (threads config through for Pro-aware detection)
-    timeout.py         # ThreadPool-based timeout wrapper
   tools/
     dates.py           # Date helpers (pandas freq compat: Q->QE, Y->YE)
     ext_pandas.py      # CSV append utilities, date parsing, DataFrame helpers
@@ -72,7 +71,7 @@ capiq_excel/
 | Range (values) | `=CIQRANGEV(id, metric, period...)` | | |
 | Range (across) | `=CIQRANGEA(id, metric, ...)` | | |
 | Table | _(none)_ | `=SPGTable(ids, metrics, periods, opts)` | `=SNLTable(dataset, ids, fields, keys, opts)` |
-| ID lookup | `=CIQ(search, "IQ_COMPANY_ID")` | `=SPG(search, field)` | `=SNLData(1, search, field)` |
+| ID lookup | `=CIQRANGEA(search, field, 1, 1)` | `=SPG(search, field)` | `=SNLData(1, search, field)` |
 | Period syntax | `IQ_FQ-80` (relative) | `FQ-80`, `FY2020`, `FQ12020` | `2013Q2`, `MRQ`, `[MRQ-1]` |
 | Options | positional args | `"Curr=USD,Mag=Millions"` | `"Curr=USD,Mag=Millions"` |
 
@@ -172,12 +171,17 @@ capiq doctor          # Check environment health
 - All public functions accept optional `config: CapiqConfig` — omitting it preserves legacy behavior
 - `test_download.py` is an integration test requiring live Excel + CIQ plugin
 - **CRITICAL**: Excel must be launched via subprocess (not `Dispatch()`) for UDFs to register — use `exceldriver._start_excel_with_addins_and_attach()`
-- In Pro CIQ compat mode: `CIQ()`, `CIQRANGE()`, and `CIQRANGEV()` work; `CIQRANGEA()` does NOT (returns function name as string)
-- CIQ builder uses `=CIQ(search,"IQ_COMPANY_ID")` for ID lookup (not CIQRANGEA)
+- In Pro CIQ compat mode: `CIQ()`, `CIQRANGE()`, `CIQRANGEV()`, and `CIQRANGEA()` all work
+- `CIQRANGEA()` in Pro compat: formula cell shows function name as string, but result spills into adjacent cell to the right — use blank-column layout
+- CIQ builder uses `=CIQRANGEA(search,"IQ_COMPANY_ID_QUICK_MATCH",1,1)` for ID lookup (handles tickers, names, CUSIPs, ISINs)
+- `CIQ()` only resolves tickers and IQ IDs — does NOT resolve company names, CUSIPs, or ISINs
+- SPG ID lookup uses different identifier namespace (returns SPG-internal IDs, not IQ IDs) — not compatible with CIQ formulas
 - CIQ compat registry: `DisableCIQUDF = 0` means CIQ is ENABLED (inverted logic)
 - SPG formulas require different metric names/ID formats than CIQ — not yet fully mapped
 - COM error `-2146826259` = `#NAME?` (UDF not registered); `-2146826273` = `#VALUE!`
 - **Pre-calculated multiples** (IQ_TEV_EBITDA, IQ_TEV_TOTAL_REV, etc.) require `IQ_LTM` period type + date range — financial period syntax (`IQ_FQ-N`) returns `(Invalid Time Period)`
 - `CIQ()` with period param works for current period only (`IQ_FQ-0`, `IQ_LTM`); historical periods (`IQ_FQ-1` etc.) return `(Invalid Period Type)` for multiples
 - `excel_lifecycle.py` provides `launch_excel_isolated()` / `close_session()` for safe non-destructive COM sessions
-- Working example scripts: `comp_table.py` (single-value CIQ), `ev_multiples_chart.py` (CIQRANGEV time series)
+- Working example scripts: `comp_table.py` (single-value CIQ), `ev_multiples_chart.py` (CIQRANGEV time series), `indexed_equity_chart.py` (CIQRANGE market data)
+- `MetricType` enum replaces stringly-typed `metric_type` field — use `MetricType.FINANCIAL`, `.MARKET`, `.OWNERSHIP`, `.ESTIMATES`, `.ID_LOOKUP`
+- `extract.py` uses batch COM reads (`Range().Value`) instead of cell-by-cell — orders of magnitude faster for large datasets

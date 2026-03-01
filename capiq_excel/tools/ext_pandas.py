@@ -19,7 +19,7 @@ def append_csvs_to_csv(csv_filepath_list, outpath=None):
 
     outpath, df_of_headers = _get_outpath_and_df_of_headers(outpath)
 
-    all_columns = [col for col in df_of_headers.columns]
+    all_columns = list(df_of_headers.columns)
 
     for file in csv_filepath_list:
         df_for_append = pd.read_csv(file) #load new data
@@ -29,7 +29,8 @@ def append_csv_to_csv(inpath, outpath):
     return append_csvs_to_csv([inpath], outpath)
 
 def append_csvs_to_monthly_csv_of_first_date(csv_filepath_list, rootname):
-    [append_csv_to_monthly_csv_of_first_date(inpath, rootname) for inpath in csv_filepath_list]
+    for inpath in csv_filepath_list:
+        append_csv_to_monthly_csv_of_first_date(inpath, rootname)
 
 def append_csv_to_monthly_csv_of_first_date(inpath, rootname):
     df_for_append = pd.read_csv(inpath)  # load new data
@@ -43,7 +44,7 @@ def append_df_to_monthly_csv_of_first_date(df_for_append, rootname):
 
 def append_df_to_csv(df, outpath):
     outpath, df_of_headers = _get_outpath_and_df_of_headers(outpath)
-    all_columns = [col for col in df_of_headers.columns]
+    all_columns = list(df_of_headers.columns)
     _append_df_to_csv(df, df_of_headers, outpath, all_columns)
 
 def _get_outpath_and_df_of_headers(outpath):

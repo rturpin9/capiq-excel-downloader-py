@@ -13,6 +13,7 @@ from capiq_excel.config import (
     FormulaDialect,
     AddinMode,
     RefreshScope,
+    MetricType,
     FormulaOptions,
 )
 from capiq_excel.formulas import get_builder

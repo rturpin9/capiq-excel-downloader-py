@@ -6,6 +6,7 @@ the legacy S&P Capital IQ Excel Plug-in syntax.
 """
 from __future__ import annotations
 
+from capiq_excel.config import MetricType
 from capiq_excel.formulas.base import DialectBuilder, QuerySpec
 from capiq_excel.tools.dates import freq_and_periods_to_begin_date_str, today_as_str
 
@@ -17,18 +18,16 @@ class CiqBuilder(DialectBuilder):
         return "ciq"
 
     def build_single_value(self, spec: QuerySpec) -> str:
-        if not spec.identifiers:
-            raise ValueError("QuerySpec.identifiers must not be empty")
+        self._validate_spec(spec)
         return f'=CIQ("{spec.identifiers[0]}", "{spec.metric}")'
 
     def build_range(self, spec: QuerySpec) -> str:
-        if not spec.identifiers:
-            raise ValueError("QuerySpec.identifiers must not be empty")
+        self._validate_spec(spec)
         label = spec.label or spec.metric
 
-        if spec.metric_type == "market":
+        if spec.metric_type == MetricType.MARKET:
             return self._build_market_range(spec, label)
-        elif spec.metric_type == "ownership":
+        elif spec.metric_type == MetricType.OWNERSHIP:
             return self._build_holdings_range(spec, label)
         else:
             return self._build_financial_range(spec, label)
@@ -38,15 +37,11 @@ class CiqBuilder(DialectBuilder):
         return self.build_range(spec)
 
     def build_identifier_lookup(self, search_str: str, field_name: str = "IQ_COMPANY_ID_QUICK_MATCH") -> str:
-        # CIQ() works in both legacy and Pro compat mode.
-        # CIQRANGEA does NOT work in Pro compat mode (returns function name as string).
-        # Map the _QUICK_MATCH field names to their CIQ() equivalents.
-        ciq_field = field_name
-        if field_name == "IQ_COMPANY_ID_QUICK_MATCH":
-            ciq_field = "IQ_COMPANY_ID"
-        elif field_name == "IQ_COMPANY_NAME_QUICK_MATCH":
-            ciq_field = "IQ_COMPANY_NAME"
-        return f'=CIQ("{search_str}","{ciq_field}")'
+        # CIQRANGEA handles all identifier types (tickers, names, CUSIPs, ISINs).
+        # In Pro CIQ compat mode, the formula cell shows the function name as a
+        # string, but the actual result spills into the adjacent cell to the right.
+        # The workbook layout accounts for this with a blank spill column.
+        return f'=CIQRANGEA("{search_str}","{field_name}",1,1)'
 
     # --- private helpers ---
 

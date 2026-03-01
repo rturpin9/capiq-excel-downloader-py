@@ -104,7 +104,7 @@ class TestMakeIdCommand:
         builder = get_builder(FormulaDialect.CIQ)
         cmd = make_id_command(builder)
         result = cmd("MSFT")
-        assert result == '=CIQ("MSFT","IQ_COMPANY_ID")'
+        assert result == '=CIQRANGEA("MSFT","IQ_COMPANY_ID_QUICK_MATCH",1,1)'
 
     def test_spg_builder_id(self):
         builder = get_builder(FormulaDialect.SPG)
@@ -118,7 +118,7 @@ class TestMakeNameCommand:
         builder = get_builder(FormulaDialect.CIQ)
         cmd = make_name_command(builder)
         result = cmd("AAPL")
-        assert result == '=CIQ("AAPL","IQ_COMPANY_NAME")'
+        assert result == '=CIQRANGEA("AAPL","IQ_COMPANY_NAME_QUICK_MATCH",1,1)'
 
     def test_spg_builder_name(self):
         builder = get_builder(FormulaDialect.SPG)

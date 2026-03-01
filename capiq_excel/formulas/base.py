@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional
 
-from capiq_excel.config import FormulaOptions
+from capiq_excel.config import FormulaOptions, MetricType
 
 
 @dataclass
@@ -21,7 +21,7 @@ class QuerySpec:
     """
     identifiers: list[str]
     metric: str
-    metric_type: str = "financial"  # "financial" | "market" | "ownership" | "estimates" | "id_lookup"
+    metric_type: MetricType = MetricType.FINANCIAL
 
     # Period specification — builders interpret these per-dialect
     period: Optional[str] = None      # dialect-native period code (e.g. "FQ0", "IQ_FQ - 80", "2013Q2")
@@ -46,6 +46,12 @@ class QuerySpec:
 
 class DialectBuilder(ABC):
     """Abstract base for dialect-specific formula generators."""
+
+    @staticmethod
+    def _validate_spec(spec: QuerySpec) -> None:
+        """Validate that a QuerySpec has required fields."""
+        if not spec.identifiers:
+            raise ValueError("QuerySpec.identifiers must not be empty")
 
     @abstractmethod
     def build_single_value(self, spec: QuerySpec) -> str:
