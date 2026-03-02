@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from dataclasses import dataclass
 from datetime import datetime
 
 import numpy as np
@@ -49,6 +50,8 @@ METRICS_LEASE_ADJUSTED = [
     ("NTM EBITDA",      "SP_EBITDA_EST",                    "ntm"),
     ("GAAP",            "IQ_GAAP_BS",                       "gaap"),
     ("P/BV",            "IQ_PBV_X",                         "ltm_raw"),
+    ("Gross Margin",    "IQ_GROSS_MARGIN",                  "ltm_raw"),
+    ("CapEx",           "IQ_CAPEX",                         "ltm"),
 ]
 
 METRICS_EXCLUDING_LEASES = [
@@ -63,7 +66,73 @@ METRICS_EXCLUDING_LEASES = [
     ("LTM EBITDA",      "IQ_EBITDA_EQ_INC_EXCL_OPER_LEASE_ADJ", "ltm"),
     ("NTM EBITDA",      "SP_EBITDA_EST",                    "ntm"),
     ("P/BV",            "IQ_PBV_X",                         "ltm_raw"),
+    ("Gross Margin",    "IQ_GROSS_MARGIN",                  "ltm_raw"),
+    ("CapEx",           "IQ_CAPEX",                         "ltm"),
 ]
+
+
+# ── Extra (optional) metrics ─────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class ExtraMetricSpec:
+    key: str            # CLI flag value, e.g. "roe"
+    label: str          # Display label / DataFrame column name
+    mnemonic: str       # CIQ mnemonic
+    call_type: str      # "ltm", "ltm_raw", "bs", "market", "ntm"
+    fmt: str            # "pct", "dollar", "mult"
+    is_summary: bool    # Include in avg/median row
+    transform: str | None = None  # "abs" for cash-outflow items
+
+
+def _extra(key, label, mnemonic, call_type, fmt, is_summary, transform=None):
+    return ExtraMetricSpec(key, label, mnemonic, call_type, fmt, is_summary, transform)
+
+
+EXTRA_METRICS_CATALOG: dict[str, ExtraMetricSpec] = {s.key: s for s in [
+    # ── Profitability ──
+    _extra("roe",          "ROE %",              "IQ_RETURN_EQUITY",          "ltm_raw", "pct",    True),
+    _extra("roa",          "ROA %",              "IQ_RETURN_ASSETS",          "ltm_raw", "pct",    True),
+    _extra("ni-margin",    "NI Margin %",        "IQ_NI_MARGIN",             "ltm_raw", "pct",    True),
+    _extra("sga-margin",   "SGA % Rev",          "IQ_SGA_MARGIN",            "ltm_raw", "pct",    True),
+    _extra("fcf-margin",   "FCF Margin %",       "IQ_FCF_MARGIN",            "ltm_raw", "pct",    True),
+    # ── Dollar amounts ──
+    _extra("gross-profit", "Gross Profit",       "IQ_GP",                    "ltm",     "dollar", False),
+    _extra("ebit",         "EBIT",               "IQ_EBIT",                  "ltm",     "dollar", False),
+    _extra("net-income",   "Net Income",         "IQ_NI",                    "ltm",     "dollar", False),
+    _extra("levered-fcf",  "Levered FCF",        "IQ_LEVERED_FCF",           "ltm",     "dollar", False),
+    _extra("unlevered-fcf","Unlevered FCF",      "IQ_UNLEVERED_FCF",         "ltm",     "dollar", False),
+    _extra("cash-from-ops","Cash from Ops",      "IQ_CASH_OPER",             "ltm",     "dollar", False),
+    _extra("da",           "D&A",                "IQ_DA",                    "ltm",     "dollar", False),
+    # ── Growth ──
+    _extra("rev-growth",   "Rev Growth %",       "IQ_TOTAL_REV_1YR_ANN_GROWTH", "ltm_raw", "pct", True),
+    _extra("ebitda-growth","EBITDA Growth %",     "IQ_EBITDA_1YR_ANN_GROWTH","ltm_raw", "pct",    True),
+    _extra("ni-growth",    "NI Growth %",        "IQ_NI_1YR_ANN_GROWTH",    "ltm_raw", "pct",    True),
+    _extra("eps-growth",   "EPS Growth %",       "IQ_DILUT_EPS_NORM_1YR_ANN_GROWTH", "ltm_raw", "pct", True),
+    # ── Multiples ──
+    _extra("pe-ltm",       "P/E LTM",            "IQ_PE_EXCL",              "ltm_raw", "mult",   True),
+    _extra("pe-ntm",       "P/E NTM",            "SP_PE_NTM",               "ntm",     "mult",   True),
+    _extra("ev-ebit",      "EV/EBIT",            "IQ_TEV_EBIT",             "ltm_raw", "mult",   True),
+    _extra("div-yield",    "Div Yield %",        "IQ_DIV_YIELD",            "ltm_raw", "pct",    True),
+    # ── Other ──
+    _extra("capex-pct-rev","CapEx % Rev",        "IQ_CAPEX_PCT_REV",        "ltm_raw", "pct",    True),
+    _extra("current-ratio","Current Ratio",      "IQ_CURRENT_RATIO",        "bs",      "mult",   True),
+    _extra("debt-equity",  "Debt/Equity",        "IQ_TOTAL_DEBT_EQUITY",    "ltm_raw", "mult",   True),
+    _extra("employees",    "Employees",          "IQ_EMPLOYEES",            "bs",      "dollar", False),
+]}
+
+
+def resolve_extras(keys: list[str]) -> tuple[list[ExtraMetricSpec], list[tuple]]:
+    """Validate extra metric keys and return specs + metric tuples to append."""
+    specs = []
+    metric_tuples = []
+    for key in keys:
+        spec = EXTRA_METRICS_CATALOG.get(key)
+        if not spec:
+            available = ", ".join(sorted(EXTRA_METRICS_CATALOG.keys()))
+            raise ValueError(f"Unknown extra metric '{key}'. Available: {available}")
+        specs.append(spec)
+        metric_tuples.append((spec.label, spec.mnemonic, spec.call_type))
+    return specs, metric_tuples
 
 
 # ── Formula builders ───────────────────────────────────────────────────────
@@ -298,8 +367,19 @@ def read_results(ws_com, num_companies: int, metrics: list) -> tuple[list[dict],
 
 # ── Table builders ─────────────────────────────────────────────────────────
 
-def build_table_lease_adjusted(results: list[dict], lease_adjust_ntm: bool) -> pd.DataFrame:
+def _append_extras(row: dict, d: dict, extra_specs: list[ExtraMetricSpec]) -> None:
+    """Append extra metric values to a row dict (mutates row in place)."""
+    for spec in extra_specs:
+        raw = safe_float(d.get(spec.label))
+        if spec.transform == "abs":
+            raw = abs(raw) if not np.isnan(raw) else np.nan
+        row[spec.label] = raw
+
+
+def build_table_lease_adjusted(results: list[dict], lease_adjust_ntm: bool,
+                               extra_specs: list[ExtraMetricSpec] | None = None) -> pd.DataFrame:
     """Build the lease-adjusted comp table DataFrame."""
+    extra_specs = extra_specs or []
     rows = []
     for d in results:
         ticker = d.get("_ticker", "")
@@ -329,10 +409,18 @@ def build_table_lease_adjusted(results: list[dict], lease_adjust_ntm: bool) -> p
                 ntm_ebitda = ntm_ebitda_raw + lease_adj
                 adj_applied = True
 
+        gross_margin_raw = safe_float(d.get("Gross Margin"))
+        capex_raw = safe_float(d.get("CapEx"))
+
+        # IQ_GROSS_MARGIN returns a percentage directly (e.g. 35.0 for 35%)
+        gross_margin_pct = gross_margin_raw if not np.isnan(gross_margin_raw) else np.nan
+        # IQ_CAPEX returns a negative number (cash outflow); take absolute value
+        capex = abs(capex_raw) if not np.isnan(capex_raw) else np.nan
+
         ebitda_margin = safe_div(ltm_ebitda, ltm_rev)
         nd_ebitda = safe_div(net_debt, ltm_ebitda)
 
-        rows.append({
+        row = {
             "Company": name,
             "Ticker": ticker,
             "GAAP": gaap if isinstance(gaap, str) else "N/A",
@@ -349,17 +437,23 @@ def build_table_lease_adjusted(results: list[dict], lease_adjust_ntm: bool) -> p
             "NTM EBITDA": ntm_ebitda,
             "Lease Adj Applied": adj_applied,
             "EBITDA Margin %": ebitda_margin * 100 if not np.isnan(ebitda_margin) else np.nan,
+            "Gross Margin %": gross_margin_pct,
+            "CapEx": capex,
             "EV/Rev": safe_div(tev, ltm_rev),
             "EV/LTM EBITDA": safe_div(tev, ltm_ebitda),
             "EV/NTM EBITDA": safe_div(tev, ntm_ebitda),
             "P/BV": pbv,
             "ND/EBITDA": nd_ebitda,
-        })
+        }
+        _append_extras(row, d, extra_specs)
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
-def build_table_excluding_leases(results: list[dict]) -> pd.DataFrame:
+def build_table_excluding_leases(results: list[dict],
+                                 extra_specs: list[ExtraMetricSpec] | None = None) -> pd.DataFrame:
     """Build the excluding-leases comp table DataFrame."""
+    extra_specs = extra_specs or []
     rows = []
     for d in results:
         ticker = d.get("_ticker", "")
@@ -379,10 +473,17 @@ def build_table_excluding_leases(results: list[dict]) -> pd.DataFrame:
         ntm_ebitda = safe_float(d.get("NTM EBITDA"))
         pbv = safe_float(d.get("P/BV"))
 
+        gross_margin_raw = safe_float(d.get("Gross Margin"))
+        capex_raw = safe_float(d.get("CapEx"))
+
+        # IQ_GROSS_MARGIN returns a percentage directly (e.g. 35.0 for 35%)
+        gross_margin_pct = gross_margin_raw if not np.isnan(gross_margin_raw) else np.nan
+        capex = abs(capex_raw) if not np.isnan(capex_raw) else np.nan
+
         ebitda_margin = safe_div(ltm_ebitda, ltm_rev)
         nd_ebitda = safe_div(net_debt, ltm_ebitda)
 
-        rows.append({
+        row = {
             "Company": name,
             "Ticker": ticker,
             "Mkt Cap": mkt_cap,
@@ -396,12 +497,16 @@ def build_table_excluding_leases(results: list[dict]) -> pd.DataFrame:
             "LTM EBITDA": ltm_ebitda,
             "NTM EBITDA": ntm_ebitda,
             "EBITDA Margin %": ebitda_margin * 100 if not np.isnan(ebitda_margin) else np.nan,
+            "Gross Margin %": gross_margin_pct,
+            "CapEx": capex,
             "EV/Rev": safe_div(tev, ltm_rev),
             "EV/LTM EBITDA": safe_div(tev, ltm_ebitda),
             "EV/NTM EBITDA": safe_div(tev, ntm_ebitda),
             "P/BV": pbv,
             "ND/EBITDA": nd_ebitda,
-        })
+        }
+        _append_extras(row, d, extra_specs)
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -410,29 +515,47 @@ def build_table_excluding_leases(results: list[dict]) -> pd.DataFrame:
 # Precision mapping for numeric columns
 _ROUND_0 = frozenset({
     "Mkt Cap", "Total Debt", "Leases", "Cash", "Net Debt", "TEV",
-    "LTM Rev", "NTM Rev", "LTM EBITDA", "Lease Adj", "NTM EBITDA",
+    "LTM Rev", "NTM Rev", "LTM EBITDA", "Lease Adj", "NTM EBITDA", "CapEx",
 })
-_ROUND_1 = frozenset({"EBITDA Margin %"})
+_ROUND_1 = frozenset({"EBITDA Margin %", "Gross Margin %"})
 _ROUND_2 = frozenset({"EV/Rev", "EV/LTM EBITDA", "EV/NTM EBITDA", "P/BV", "ND/EBITDA"})
 
 
-def _round_value(col: str, val: float) -> float | int:
-    """Round a float to the appropriate precision for its column."""
-    if col in _ROUND_0:
-        return round(val)
-    if col in _ROUND_1:
-        return round(val, 1)
-    if col in _ROUND_2:
-        return round(val, 2)
-    return val
+def _make_round_fn(extra_specs: list[ExtraMetricSpec] | None = None):
+    """Return a rounding function that handles base + extra columns."""
+    # Build local sets that include extras
+    round_0 = set(_ROUND_0)
+    round_1 = set(_ROUND_1)
+    round_2 = set(_ROUND_2)
+    for spec in (extra_specs or []):
+        if spec.fmt == "dollar":
+            round_0.add(spec.label)
+        elif spec.fmt == "pct":
+            round_1.add(spec.label)
+        elif spec.fmt == "mult":
+            round_2.add(spec.label)
+
+    def _round_value(col: str, val: float) -> float | int:
+        if col in round_0:
+            return round(val)
+        if col in round_1:
+            return round(val, 1)
+        if col in round_2:
+            return round(val, 2)
+        return val
+
+    return _round_value
 
 
 def dataframe_to_json(df: pd.DataFrame, mode: str, currency: str,
-                      date: str, lease_adjust_ntm: bool) -> dict:
+                      date: str, lease_adjust_ntm: bool,
+                      extra_specs: list[ExtraMetricSpec] | None = None) -> dict:
     """Convert a comp table DataFrame to a structured dict.
 
     Applies intelligent rounding and strips None/NaN values to minimize tokens.
     """
+    round_value = _make_round_fn(extra_specs)
+
     output = {
         "mode": mode,
         "currency": currency,
@@ -449,9 +572,9 @@ def dataframe_to_json(df: pd.DataFrame, mode: str, currency: str,
             if isinstance(val, float) and np.isnan(val):
                 continue  # strip None/NaN values
             elif isinstance(val, (np.floating, np.integer)):
-                company[col] = _round_value(col, float(val))
+                company[col] = round_value(col, float(val))
             elif isinstance(val, float):
-                company[col] = _round_value(col, val)
+                company[col] = round_value(col, val)
             else:
                 company[col] = val
         companies.append(company)
@@ -529,6 +652,7 @@ def run_comps(
     lease_adjust_ntm: bool = True,
     date: str | None = None,
     max_wait: int = 180,
+    extras: list[str] | None = None,
 ) -> dict:
     """Full pipeline: build workbook -> launch Excel -> refresh -> read -> return JSON.
 
@@ -546,6 +670,8 @@ def run_comps(
         As-of date in M/D/YYYY format. Defaults to today.
     max_wait : int
         Max seconds to wait for formula refresh.
+    extras : list[str] or None
+        Optional extra metric keys (e.g. ["roe", "rev-growth"]).
 
     Returns
     -------
@@ -566,10 +692,17 @@ def run_comps(
     # Select metrics
     metrics = METRICS_LEASE_ADJUSTED if mode == "lease-adjusted" else METRICS_EXCLUDING_LEASES
 
+    # Resolve extras and append to metrics list
+    extra_specs = []
+    if extras:
+        extra_specs, extra_tuples = resolve_extras(extras)
+        metrics = list(metrics) + extra_tuples
+
     xlsx_path = os.path.abspath("_comps_mcp_temp.xlsx")
 
-    log.info("Comp pull: %d tickers, mode=%s, currency=%s, date=%s",
-             len(tickers), mode, currency, date)
+    log.info("Comp pull: %d tickers, mode=%s, currency=%s, date=%s, extras=%s",
+             len(tickers), mode, currency, date,
+             [s.key for s in extra_specs] if extra_specs else "none")
 
     # Build workbook
     build_workbook(xlsx_path, tickers, metrics, date, curr_opt)
@@ -602,12 +735,12 @@ def run_comps(
 
     # Build table
     if mode == "lease-adjusted":
-        df = build_table_lease_adjusted(results, lease_adjust_ntm)
+        df = build_table_lease_adjusted(results, lease_adjust_ntm, extra_specs)
     else:
-        df = build_table_excluding_leases(results)
+        df = build_table_excluding_leases(results, extra_specs)
 
     # Convert to JSON-serializable dict
-    data = dataframe_to_json(df, mode, currency, date, lease_adjust_ntm)
+    data = dataframe_to_json(df, mode, currency, date, lease_adjust_ntm, extra_specs)
 
     # Merge resolution into company dicts (only non-OK statuses)
     for note, company in zip(resolution_notes, data["companies"]):

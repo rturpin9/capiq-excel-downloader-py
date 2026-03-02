@@ -78,6 +78,8 @@ _COLS_LEASE_ADJ = [
     ("Lease Adj", _fmt_dollar, False),
     ("NTM EBITDA", _fmt_dollar, False),
     ("EBITDA Margin %", _fmt_pct, True),
+    ("Gross Margin %", _fmt_pct, True),
+    ("CapEx", _fmt_dollar, False),
     ("EV/Rev", _fmt_mult, True),
     ("EV/LTM EBITDA", _fmt_mult, True),
     ("EV/NTM EBITDA", _fmt_mult, True),
@@ -97,6 +99,8 @@ _COLS_EXCL_LEASES = [
     ("LTM EBITDA", _fmt_dollar, False),
     ("NTM EBITDA", _fmt_dollar, False),
     ("EBITDA Margin %", _fmt_pct, True),
+    ("Gross Margin %", _fmt_pct, True),
+    ("CapEx", _fmt_dollar, False),
     ("EV/Rev", _fmt_mult, True),
     ("EV/LTM EBITDA", _fmt_mult, True),
     ("EV/NTM EBITDA", _fmt_mult, True),
@@ -143,13 +147,19 @@ def _format_comps_markdown(
     date: str,
     lease_adjust_ntm: bool,
     groups: dict | None = None,
+    extra_specs: list | None = None,
 ) -> str:
     """Format comp table data as a markdown string."""
     lines: list[str] = []
     df = pd.DataFrame(data["companies"])
 
     mode_label = "Lease Adjusted" if mode == "lease-adjusted" else "Excluding Leases"
-    cols = _COLS_LEASE_ADJ if mode == "lease-adjusted" else _COLS_EXCL_LEASES
+    cols = list(_COLS_LEASE_ADJ if mode == "lease-adjusted" else _COLS_EXCL_LEASES)
+
+    # Append extra columns dynamically
+    for spec in (extra_specs or []):
+        fmt_fn = {"pct": _fmt_pct, "dollar": _fmt_dollar, "mult": _fmt_mult}[spec.fmt]
+        cols.append((spec.label, fmt_fn, spec.is_summary))
 
     # Header
     lines.append(f"**Comparable Companies Analysis ({mode_label})**")
@@ -267,6 +277,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="Output raw JSON dict instead of markdown table")
     cp.add_argument("--csv", default=None, metavar="PATH",
                     help="Also write CSV to this path")
+    cp.add_argument("--extra", nargs="*", default=None,
+                    help='Optional extra metrics: "roe" "rev-growth" "div-yield" (run --list-extras to see all)')
+    cp.add_argument("--list-extras", action="store_true",
+                    help="Print available extra metrics and exit")
 
     # --- chart ---
     ch = sub.add_parser("chart", help="Create time-series chart from Capital IQ data")
@@ -513,10 +527,30 @@ def _cmd_doctor() -> int:
 
 def _cmd_comps(args) -> int:
     """Pull comparable companies analysis table."""
-    from capiq_excel.engines.comps import run_comps
+    from capiq_excel.engines.comps import run_comps, resolve_extras, EXTRA_METRICS_CATALOG
+
+    # Handle --list-extras
+    if args.list_extras:
+        print("Available extra metrics for --extra flag:\n")
+        print(f"{'Key':<16} {'Label':<20} {'Type':<8} {'Summary':<8} {'CIQ Mnemonic'}")
+        print(f"{'-'*16} {'-'*20} {'-'*8} {'-'*8} {'-'*30}")
+        for key in sorted(EXTRA_METRICS_CATALOG):
+            s = EXTRA_METRICS_CATALOG[key]
+            print(f"{s.key:<16} {s.label:<20} {s.fmt:<8} {'yes' if s.is_summary else 'no':<8} {s.mnemonic}")
+        print(f"\nUsage: capiq comps TICKER1 TICKER2 --extra roe rev-growth div-yield")
+        return 0
 
     lease_adjust_ntm = not args.no_lease_adjust_ntm
     groups = parse_groups(args.groups)
+
+    # Resolve extras early to fail fast on bad keys
+    extra_specs = []
+    if args.extra:
+        try:
+            extra_specs, _ = resolve_extras(args.extra)
+        except ValueError as e:
+            print(json.dumps({"error": "validation", "message": str(e)}))
+            return 1
 
     try:
         data = run_comps(
@@ -526,6 +560,7 @@ def _cmd_comps(args) -> int:
             lease_adjust_ntm=lease_adjust_ntm,
             date=args.date,
             max_wait=args.max_wait,
+            extras=args.extra,
         )
     except Exception as e:
         print(json.dumps({"error": "execution", "message": str(e)}))
@@ -536,7 +571,7 @@ def _cmd_comps(args) -> int:
     else:
         md = _format_comps_markdown(
             data, args.mode, args.currency, data["date"],
-            lease_adjust_ntm, groups,
+            lease_adjust_ntm, groups, extra_specs,
         )
         print(md)
 
