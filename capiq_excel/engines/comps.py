@@ -1,7 +1,7 @@
 """Core comp table engine — extracted from pull_comps.py.
 
 All business logic for building, refreshing, and reading CIQ comp tables.
-No print() — uses logging throughout. Returns structured dicts for MCP consumption.
+No print() — uses logging throughout. Returns structured dicts for consumption.
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from openpyxl.utils import get_column_letter
 
 import pythoncom
 
-log = logging.getLogger("capiq_mcp")
+log = logging.getLogger("capiq_excel")
 
 # ── Constants ─────────────────────────────────────────────────────────────
 
@@ -429,7 +429,7 @@ def _round_value(col: str, val: float) -> float | int:
 
 def dataframe_to_json(df: pd.DataFrame, mode: str, currency: str,
                       date: str, lease_adjust_ntm: bool) -> dict:
-    """Convert a comp table DataFrame to a structured dict for MCP output.
+    """Convert a comp table DataFrame to a structured dict.
 
     Applies intelligent rounding and strips None/NaN values to minimize tokens.
     """

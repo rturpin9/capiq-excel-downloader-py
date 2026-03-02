@@ -5,22 +5,216 @@ Usage:
     capiq status            Show detected runtime profile and config
     capiq detect-addins     Detect installed add-ins (requires Excel)
     capiq download          Run the data download pipeline
-    capiq doctor            Run diagnostics and check environment health
+    capiq doctor            Run environment diagnostics
+    capiq comps             Pull comparable companies analysis table
+    capiq chart             Create time-series chart from CIQ data
+    capiq lookup            Resolve company identifiers to CIQ IQ IDs
 """
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from typing import Optional
 
+import numpy as np
+import pandas as pd
+
 from capiq_excel.config import CapiqConfig, FormulaDialect, AddinMode
 
+
+# ── Markdown table formatter ──────────────────────────────────────────────
+
+def _fmt_dollar(val) -> str:
+    """Format a dollar value as $X,XXX (no decimals)."""
+    if pd.isna(val):
+        return "N/A"
+    try:
+        return f"${val:,.0f}"
+    except (ValueError, TypeError):
+        return "N/A"
+
+
+def _fmt_mult(val) -> str:
+    """Format a multiple as X.Xx (one decimal)."""
+    if pd.isna(val):
+        return "N/A"
+    try:
+        return f"{val:.1f}x"
+    except (ValueError, TypeError):
+        return "N/A"
+
+
+def _fmt_pct(val) -> str:
+    """Format a percentage as XX.X%."""
+    if pd.isna(val):
+        return "N/A"
+    try:
+        return f"{val:.1f}%"
+    except (ValueError, TypeError):
+        return "N/A"
+
+
+def _fmt_str(val) -> str:
+    """Format a string value."""
+    if pd.isna(val) or val is None:
+        return "N/A"
+    return str(val)
+
+
+# Column format specs: (column_name, formatter, is_summary_col)
+_COLS_LEASE_ADJ = [
+    ("GAAP", _fmt_str, False),
+    ("Mkt Cap", _fmt_dollar, False),
+    ("Total Debt", _fmt_dollar, False),
+    ("Leases", _fmt_dollar, False),
+    ("Cash", _fmt_dollar, False),
+    ("Net Debt", _fmt_dollar, False),
+    ("TEV", _fmt_dollar, False),
+    ("LTM Rev", _fmt_dollar, False),
+    ("NTM Rev", _fmt_dollar, False),
+    ("LTM EBITDA", _fmt_dollar, False),
+    ("Lease Adj", _fmt_dollar, False),
+    ("NTM EBITDA", _fmt_dollar, False),
+    ("EBITDA Margin %", _fmt_pct, True),
+    ("EV/Rev", _fmt_mult, True),
+    ("EV/LTM EBITDA", _fmt_mult, True),
+    ("EV/NTM EBITDA", _fmt_mult, True),
+    ("P/BV", _fmt_mult, True),
+    ("ND/EBITDA", _fmt_mult, True),
+]
+
+_COLS_EXCL_LEASES = [
+    ("Mkt Cap", _fmt_dollar, False),
+    ("Total Debt", _fmt_dollar, False),
+    ("Leases", _fmt_dollar, False),
+    ("Cash", _fmt_dollar, False),
+    ("Net Debt", _fmt_dollar, False),
+    ("TEV", _fmt_dollar, False),
+    ("LTM Rev", _fmt_dollar, False),
+    ("NTM Rev", _fmt_dollar, False),
+    ("LTM EBITDA", _fmt_dollar, False),
+    ("NTM EBITDA", _fmt_dollar, False),
+    ("EBITDA Margin %", _fmt_pct, True),
+    ("EV/Rev", _fmt_mult, True),
+    ("EV/LTM EBITDA", _fmt_mult, True),
+    ("EV/NTM EBITDA", _fmt_mult, True),
+    ("P/BV", _fmt_mult, True),
+    ("ND/EBITDA", _fmt_mult, True),
+]
+
+
+def _stat_row(df: pd.DataFrame, cols: list, fn: str, label: str) -> str:
+    """Build a markdown table row with mean/median of summary columns."""
+    parts = [label]
+    for col_name, fmt, is_summary in cols:
+        if is_summary and col_name in df.columns:
+            vals = df[col_name].dropna()
+            if len(vals) > 0:
+                parts.append(fmt(getattr(vals, fn)()))
+            else:
+                parts.append("N/A")
+        else:
+            parts.append("")
+    return "| " + " | ".join(parts) + " |"
+
+
+def parse_groups(group_args: list[str] | None) -> dict | None:
+    """Parse --groups 'Label: T1 T2' 'Label2: T3 T4' into dict."""
+    if not group_args:
+        return None
+    groups = {}
+    for g in group_args:
+        if ":" not in g:
+            print(f"Warning: ignoring malformed group '{g}' (expected 'Label: T1 T2 ...')",
+                  file=sys.stderr)
+            continue
+        label, tickers_str = g.split(":", 1)
+        tickers = tickers_str.strip().split()
+        groups[label.strip()] = tickers
+    return groups if groups else None
+
+
+def _format_comps_markdown(
+    data: dict,
+    mode: str,
+    currency: str,
+    date: str,
+    lease_adjust_ntm: bool,
+    groups: dict | None = None,
+) -> str:
+    """Format comp table data as a markdown string."""
+    lines: list[str] = []
+    df = pd.DataFrame(data["companies"])
+
+    mode_label = "Lease Adjusted" if mode == "lease-adjusted" else "Excluding Leases"
+    cols = _COLS_LEASE_ADJ if mode == "lease-adjusted" else _COLS_EXCL_LEASES
+
+    # Header
+    lines.append(f"**Comparable Companies Analysis ({mode_label})**")
+    lines.append(f"As at {date} (Millions ${currency.upper()})")
+    if mode == "lease-adjusted" and lease_adjust_ntm:
+        lines.append("NTM EBITDA lease-adjusted for US GAAP reporters (TTM lease adj added as proxy)")
+    elif mode == "lease-adjusted":
+        lines.append("NTM EBITDA: straight consensus (lease adjustment disabled)")
+    else:
+        lines.append("TEV/Debt exclude operating leases; EBITDA excludes lease adjustment")
+    lines.append("")
+
+    # Build table header
+    col_names = ["Company"] + [c[0] for c in cols]
+    header = "| " + " | ".join(col_names) + " |"
+    separator = "| " + " | ".join("---" for _ in col_names) + " |"
+
+    def _company_rows(section_df: pd.DataFrame) -> list[str]:
+        row_lines = []
+        for _, row in section_df.iterrows():
+            cname = str(row.get("Company", ""))[:40]
+            if mode == "lease-adjusted" and row.get("Lease Adj Applied", False):
+                cname += " *"
+            parts = [cname]
+            for col_name, fmt, _ in cols:
+                parts.append(fmt(row.get(col_name, np.nan)))
+            row_lines.append("| " + " | ".join(parts) + " |")
+        return row_lines
+
+    if groups:
+        for group_name, group_tickers in groups.items():
+            group_df = df[df["Ticker"].isin(group_tickers)]
+            if group_df.empty:
+                continue
+            lines.append(f"### {group_name}")
+            lines.append("")
+            lines.append(header)
+            lines.append(separator)
+            lines.extend(_company_rows(group_df))
+            lines.append(_stat_row(group_df, cols, "mean", f"**Avg {group_name}**"))
+            lines.append(_stat_row(group_df, cols, "median", f"**Med {group_name}**"))
+            lines.append("")
+    else:
+        lines.append(header)
+        lines.append(separator)
+        lines.extend(_company_rows(df))
+
+    # Overall stats
+    lines.append(_stat_row(df, cols, "mean", "**Average**"))
+    lines.append(_stat_row(df, cols, "median", "**Median**"))
+
+    # Footnotes
+    if mode == "lease-adjusted" and lease_adjust_ntm:
+        lines.append("")
+        lines.append("\\* NTM EBITDA lease-adjusted (TTM lease expense added for US GAAP reporters)")
+
+    return "\n".join(lines)
+
+
+# ── CLI entry point ───────────────────────────────────────────────────────
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="capiq",
-        description="Capital IQ Excel data downloader CLI",
+        description="Capital IQ Excel data downloader and analysis CLI",
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true",
@@ -35,7 +229,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     sub.add_parser("detect-addins", help="Detect installed Capital IQ add-ins (starts Excel)")
 
     # --- download ---
-    dl = sub.add_parser("download", help="Run the data download pipeline")
+    dl = sub.add_parser("download", help="Run the legacy data download pipeline")
     dl.add_argument("--ids", nargs="+", help="Company identifiers (tickers, CUSIPs, etc.)")
     dl.add_argument("--ids-file", help="Path to file with one identifier per line")
     dl.add_argument("--financial-items", nargs="+", help="Financial data items (e.g. IQ_TOTAL_REVENUE)")
@@ -52,14 +246,77 @@ def main(argv: Optional[list[str]] = None) -> int:
     # --- doctor ---
     sub.add_parser("doctor", help="Run environment diagnostics")
 
+    # --- comps ---
+    cp = sub.add_parser("comps", help="Pull comparable companies analysis table via SPG formulas")
+    cp.add_argument("tickers", nargs="+",
+                    help="Company tickers (e.g. NYSE:HAL TSX:PD DSGX)")
+    cp.add_argument("--currency", default="CAD",
+                    help="Output currency code (default: CAD)")
+    cp.add_argument("--mode", choices=["lease-adjusted", "excluding-leases"],
+                    default="lease-adjusted",
+                    help="Comp table mode (default: lease-adjusted)")
+    cp.add_argument("--no-lease-adjust-ntm", action="store_true",
+                    help="Disable NTM EBITDA lease adjustment for US GAAP reporters")
+    cp.add_argument("--groups", nargs="*",
+                    help='Group tickers by sector: "U.S.: NYSE:HAL NYSE:SLB" "Canada: TSX:PD TSX:TCW"')
+    cp.add_argument("--date", default=None,
+                    help="As-of date in M/D/YYYY format (default: today)")
+    cp.add_argument("--max-wait", type=int, default=180,
+                    help="Max seconds to wait for formula refresh (default: 180)")
+    cp.add_argument("--json", action="store_true", dest="json_output",
+                    help="Output raw JSON dict instead of markdown table")
+    cp.add_argument("--csv", default=None, metavar="PATH",
+                    help="Also write CSV to this path")
+
+    # --- chart ---
+    ch = sub.add_parser("chart", help="Create time-series chart from Capital IQ data")
+    ch.add_argument("tickers", nargs="+",
+                    help="Company tickers (e.g. DSGX NYSE:HAL TSX:PD)")
+    ch.add_argument("--metrics", nargs="+", required=True,
+                    help="CIQ mnemonics (e.g. IQ_CLOSEPRICE IQ_TEV_EBITDA)")
+    ch.add_argument("--metric-type", required=True,
+                    choices=["market", "multiple", "financial"],
+                    help="Data category: market (prices), multiple (EV/EBITDA), financial (revenue)")
+    ch.add_argument("--chart-type", default="line",
+                    choices=["line", "bar", "line_marker", "dual_axis"],
+                    help="Chart style (default: line)")
+    ch.add_argument("--start-date", default=None,
+                    help="Start date M/D/YYYY (default: 1Y ago for market/multiple)")
+    ch.add_argument("--end-date", default=None,
+                    help="End date M/D/YYYY (default: today)")
+    ch.add_argument("--period-type", default="IQ_LTM",
+                    help="Period type for multiples: IQ_LTM, IQ_NTM, etc. (default: IQ_LTM)")
+    ch.add_argument("--frequency", default="Q", choices=["Q", "Y"],
+                    help="Frequency for financial data: Q (quarterly) or Y (annual)")
+    ch.add_argument("--num-periods", type=int, default=12,
+                    help="Number of periods back for financial data (default: 12)")
+    ch.add_argument("--indexed", action="store_true",
+                    help="Index market data to base 100 for relative comparison")
+    ch.add_argument("--currency", default="USD",
+                    help="Output currency code (default: USD)")
+    ch.add_argument("--title", default=None,
+                    help="Chart title (auto-generated if omitted)")
+    ch.add_argument("--output", default=None, metavar="PATH",
+                    help="Output PNG path (default: chart_output.png)")
+    ch.add_argument("--max-wait", type=int, default=180,
+                    help="Max seconds to wait for formula refresh (default: 180)")
+
+    # --- lookup ---
+    lk = sub.add_parser("lookup", help="Resolve company identifiers to CIQ IQ IDs and names")
+    lk.add_argument("identifiers", nargs="+",
+                    help="Identifiers to resolve (tickers, company names, CUSIPs, ISINs)")
+    lk.add_argument("--max-wait", type=int, default=60,
+                    help="Max seconds to wait for resolution (default: 60)")
+
     args = parser.parse_args(argv)
 
-    # Configure logging
+    # Configure logging to stderr so stdout stays clean for data output
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
         datefmt="%H:%M:%S",
+        stream=sys.stderr,
     )
 
     if args.command is None:
@@ -74,6 +331,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         return _cmd_download(args)
     elif args.command == "doctor":
         return _cmd_doctor()
+    elif args.command == "comps":
+        return _cmd_comps(args)
+    elif args.command == "chart":
+        return _cmd_chart(args)
+    elif args.command == "lookup":
+        return _cmd_lookup(args)
     else:
         parser.print_help()
         return 1
@@ -244,6 +507,91 @@ def _cmd_doctor() -> int:
     else:
         print("All checks passed!")
         return 0
+
+
+# ── New subcommands ───────────────────────────────────────────────────────
+
+def _cmd_comps(args) -> int:
+    """Pull comparable companies analysis table."""
+    from capiq_excel.engines.comps import run_comps
+
+    lease_adjust_ntm = not args.no_lease_adjust_ntm
+    groups = parse_groups(args.groups)
+
+    try:
+        data = run_comps(
+            tickers=args.tickers,
+            currency=args.currency,
+            mode=args.mode,
+            lease_adjust_ntm=lease_adjust_ntm,
+            date=args.date,
+            max_wait=args.max_wait,
+        )
+    except Exception as e:
+        print(json.dumps({"error": "execution", "message": str(e)}))
+        return 1
+
+    if args.json_output:
+        print(json.dumps(data, indent=2))
+    else:
+        md = _format_comps_markdown(
+            data, args.mode, args.currency, data["date"],
+            lease_adjust_ntm, groups,
+        )
+        print(md)
+
+    if args.csv:
+        df = pd.DataFrame(data["companies"])
+        df.to_csv(args.csv, index=False)
+        print(f"CSV saved to: {args.csv}", file=sys.stderr)
+
+    return 0
+
+
+def _cmd_chart(args) -> int:
+    """Create time-series chart from CIQ data."""
+    from capiq_excel.engines.chart import run_chart
+
+    try:
+        result = run_chart(
+            tickers=args.tickers,
+            metrics=args.metrics,
+            metric_type=args.metric_type,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            period_type=args.period_type,
+            frequency=args.frequency,
+            num_periods=args.num_periods,
+            chart_type=args.chart_type,
+            indexed=args.indexed,
+            currency=args.currency,
+            title=args.title,
+            output_path=args.output,
+            max_wait=args.max_wait,
+        )
+    except Exception as e:
+        print(json.dumps({"error": "execution", "message": str(e)}))
+        return 1
+
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+def _cmd_lookup(args) -> int:
+    """Resolve company identifiers to CIQ IQ IDs."""
+    from capiq_excel.engines.id_lookup import run_id_lookup
+
+    try:
+        result = run_id_lookup(
+            identifiers=args.identifiers,
+            max_wait=args.max_wait,
+        )
+    except Exception as e:
+        print(json.dumps({"error": "execution", "message": str(e)}))
+        return 1
+
+    print(json.dumps(result, indent=2))
+    return 0
 
 
 if __name__ == "__main__":

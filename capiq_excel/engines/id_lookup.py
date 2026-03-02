@@ -12,9 +12,9 @@ import time
 import pythoncom
 from openpyxl import Workbook
 
-from capiq_mcp.comps_engine import _ERROR_TOKENS
+from capiq_excel.engines.comps import _ERROR_TOKENS
 
-log = logging.getLogger("capiq_mcp")
+log = logging.getLogger("capiq_excel")
 
 
 def build_id_workbook(path: str, identifiers: list[str]) -> None:

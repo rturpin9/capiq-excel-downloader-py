@@ -2,13 +2,13 @@
 name: chart
 description: Create professional time-series charts from S&P Capital IQ data. Use when the user wants stock price charts, valuation multiple trends, financial metric charts, or asks to "chart" or "plot" company data.
 argument-hint: [tickers...] [metric] [--period 1Y] [--bar] [--indexed] [--dual-axis]
-allowed-tools: Agent
+allowed-tools: Bash
 user-invocable: true
 ---
 
 # Capital IQ Chart Tool
 
-Create professional IB-quality charts from Capital IQ data via the `capiq-analyst` subagent, which calls the `capiq` MCP server's `pull_chart_data` tool.
+Create professional IB-quality charts from Capital IQ data via `capiq chart` CLI.
 
 ## Arguments from user: $ARGUMENTS
 
@@ -26,22 +26,22 @@ Parse the user's request for:
    - `"line_marker"` → optional for financial (line with data point markers)
    - `"dual_axis"` → when user asks to overlay 2 metrics with different scales
 5. **Date range / periods**:
-   - Market/multiple: `start_date` and `end_date` in M/D/YYYY (default: 1 year lookback)
-   - Financial: `frequency` ("Q" or "Y") and `num_periods` (default: 12 quarters)
-6. **Indexed** — if user says "indexed" or "relative performance", set `indexed: true` (normalizes to base 100)
-7. **Period type** — for multiples: `IQ_LTM` (default), `IQ_NTM`, `IQ_FY`, etc.
+   - Market/multiple: `--start-date` and `--end-date` in M/D/YYYY (default: 1 year lookback)
+   - Financial: `--frequency` ("Q" or "Y") and `--num-periods` (default: 12 quarters)
+6. **Indexed** — if user says "indexed" or "relative performance", add `--indexed` (normalizes to base 100)
+7. **Period type** — for multiples: `--period-type IQ_LTM` (default), `IQ_NTM`, `IQ_FY`, etc.
 8. **Currency** — default is `USD` unless specified
 
 ## Metric Mapping Reference
 
-### Market data (metric_type: "market")
+### Market data (--metric-type market)
 | User says | CIQ mnemonic |
 |---|---|
 | stock price, share price, close price | `IQ_CLOSEPRICE` |
 | enterprise value, TEV | `IQ_TEV` |
 | market cap | `IQ_MARKETCAP` |
 
-### Multiples (metric_type: "multiple")
+### Multiples (--metric-type multiple)
 | User says | CIQ mnemonic | Period type |
 |---|---|---|
 | EV/EBITDA | `IQ_TEV_EBITDA` | `IQ_LTM` |
@@ -52,7 +52,7 @@ Parse the user's request for:
 | forward P/E | `IQ_PE_EXCL_FWD` | `IQ_NTM` |
 | P/BV, price to book | `IQ_PBV_X` | `IQ_LTM` |
 
-### Financial data (metric_type: "financial")
+### Financial data (--metric-type financial)
 | User says | CIQ mnemonic |
 |---|---|
 | revenue, sales | `IQ_TOTAL_REV` |
@@ -76,33 +76,24 @@ Parse the user's request for:
 
 ## Execution
 
-Spawn the `capiq:capiq-analyst` subagent via the Agent tool with:
-- The parsed parameters (tickers, metrics, metric_type, chart_type, etc.)
-- Instruction to call `pull_chart_data` and report the chart path + any resolution notes
+Run `capiq chart --help` if you need to discover available flags.
 
-```
-subagent_type: "capiq-analyst"
-model: "sonnet"
-prompt: "Call pull_chart_data with: tickers=[...], metrics=[...], metric_type=..., chart_type=..., [other params]. Report the chart path and any resolution issues."
+Build the command:
+```bash
+capiq chart TICKER1 TICKER2 ... --metrics IQ_CLOSEPRICE --metric-type market [--chart-type line] [--start-date M/D/YYYY] [--end-date M/D/YYYY] [--indexed] [--currency USD] [--output path.png]
 ```
 
-**IMPORTANT:** Use `model: "sonnet"` — the chart skill requires judgement for metric mapping and chart type selection that Haiku may not handle well.
-
-The subagent will:
-1. Call `mcp__capiq__pull_chart_data` with the parameters
-2. Return the chart path and resolution notes
-
-**Present the chart path to the user** so they can view the PNG. If the user asks about the data, summarize key values from the returned data dict.
+The CLI outputs JSON to stdout with `chart_path`, `data` (summary stats), and `chart_config`. Present the chart path to the user so they can view the PNG.
 
 ## Defaults Summary
 
 | Setting | Default | Override |
 |---|---|---|
-| Currency | **USD** | "in CAD" or "--currency CAD" |
-| Chart type (market/multiple) | **line** | "--bar", "--dual-axis" |
-| Chart type (financial) | **bar** | "--line", "--line-marker" |
-| Indexed | **OFF** | "--indexed" or "indexed" |
-| Period type (multiples) | **IQ_LTM** | "forward" or "NTM" → IQ_NTM |
-| Frequency (financial) | **Q** (quarterly) | "--annual" or "--yearly" → Y |
-| Num periods (financial) | **12** | "--periods N" |
-| Lookback (market/multiple) | **1 year** | "--period 6M", "--from M/D/YYYY" |
+| Currency | **USD** | "--currency CAD" |
+| Chart type (market/multiple) | **line** | "--chart-type bar", "--chart-type dual_axis" |
+| Chart type (financial) | **bar** | "--chart-type line", "--chart-type line_marker" |
+| Indexed | **OFF** | "--indexed" |
+| Period type (multiples) | **IQ_LTM** | "--period-type IQ_NTM" |
+| Frequency (financial) | **Q** (quarterly) | "--frequency Y" |
+| Num periods (financial) | **12** | "--num-periods N" |
+| Lookback (market/multiple) | **1 year** | "--start-date M/D/YYYY" |

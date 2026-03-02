@@ -1,6 +1,6 @@
 """Capital IQ Comparable Companies Table — CLI wrapper.
 
-Thin CLI interface that delegates to capiq_mcp.comps_engine for business logic.
+Thin CLI interface that delegates to capiq_excel.engines.comps for business logic.
 Supports the same arguments as before. Standalone usage still works.
 
 Usage:
@@ -31,7 +31,7 @@ logging.basicConfig(
     stream=sys.stderr,
 )
 
-from capiq_mcp.comps_engine import (
+from capiq_excel.engines.comps import (
     METRICS_LEASE_ADJUSTED,
     METRICS_EXCLUDING_LEASES,
     run_comps,
@@ -267,7 +267,7 @@ def main():
     if mode == "lease-adjusted":
         print(f"  NTM lease adjustment: {'ON' if lease_adjust_ntm else 'OFF'}", file=sys.stderr)
 
-    # Run the engine (all business logic is in capiq_mcp.comps_engine)
+    # Run the engine (all business logic is in capiq_excel.engines.comps)
     data = run_comps(
         tickers=tickers,
         currency=args.currency,

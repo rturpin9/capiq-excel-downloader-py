@@ -5,7 +5,7 @@ Supports three metric types:
   - multiple: CIQRANGEV with period type + date range (EV/EBITDA, P/E, etc.)
   - financial: CIQRANGE with period offset (revenue, EBITDA, etc.)
 
-All COM/Excel work follows the same pattern as comps_engine.py:
+All COM/Excel work follows the same pattern as comps.py:
   build workbook -> launch isolated Excel -> RefreshSheet -> poll -> extract -> close.
 
 Chart rendering uses matplotlib with an IB-quality professional template.
@@ -29,9 +29,9 @@ import pandas as pd
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 
-from capiq_mcp.comps_engine import safe_float, is_error_value
+from capiq_excel.engines.comps import safe_float, is_error_value
 
-log = logging.getLogger("capiq_mcp")
+log = logging.getLogger("capiq_excel")
 
 # ── IB-quality chart style constants ──────────────────────────────────────
 

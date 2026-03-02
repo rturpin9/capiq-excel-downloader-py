@@ -2,13 +2,13 @@
 name: comps
 description: Pull a comparable companies analysis table from S&P Capital IQ Pro. Use when the user provides company tickers and wants a comp table, valuation multiples, or asks to "pull comps".
 argument-hint: [tickers...] [--currency USD] [--excluding-leases] [--no-lease-adjust]
-allowed-tools: Agent
+allowed-tools: Bash
 user-invocable: true
 ---
 
 # Capital IQ Comparable Companies Analysis
 
-Pull comp tables from Capital IQ via the `capiq-analyst` subagent, which calls the `capiq` MCP server to retrieve data and formats it as a clean markdown table.
+Pull comp tables from Capital IQ via `capiq comps` CLI and format results as a clean markdown table.
 
 ## Arguments from user: $ARGUMENTS
 
@@ -17,7 +17,7 @@ Parse the user's request for:
 2. **Currency** — default is **CAD** unless the user specifies otherwise.
 3. **Mode** — default is **lease-adjusted** unless user says "excluding leases" or "ex-leases".
 4. **NTM lease adjustment** — default is **ON**. User can disable with "no lease adjust" or "straight consensus NTM".
-5. **Groups** — if the user specifies categories/sectors, pass them to the agent.
+5. **Groups** — if the user specifies categories/sectors, pass them via `--groups`.
 6. **Date** — defaults to today. User can specify with "as of [date]".
 
 ## Ticker format guide
@@ -41,33 +41,22 @@ Parse the user's request for:
 
 ## Execution
 
-Spawn the `capiq:capiq-analyst` subagent via the Agent tool with:
-- The list of tickers (with exchange prefixes resolved)
-- Currency, mode, lease adjustment preference, groups, and date
-- Instruction to call the `pull_comps` MCP tool and format results as a markdown table
+Run `capiq comps --help` if you need to discover available flags.
 
-Example Agent tool call:
-
-```
-subagent_type: "capiq-analyst"
-model: "haiku"
-prompt: "Pull a comp table for the following tickers: NYSE:HAL, NYSE:SLB, TSX:PD, TSX:TCW. Currency: CAD, mode: lease-adjusted, NTM lease adjustment: ON. Format as a markdown table with summary statistics."
+Build the command:
+```bash
+capiq comps TICKER1 TICKER2 ... [--currency USD] [--mode excluding-leases] [--no-lease-adjust-ntm] [--groups "Label: T1 T2" "Label: T3 T4"] [--date M/D/YYYY]
 ```
 
-**IMPORTANT:** Always pass `model: "haiku"` when spawning the subagent. The task is formulaic (one MCP call + table formatting) and runtime is dominated by Excel COM, not LLM reasoning.
+The default output is a markdown table printed to stdout. The CLI logs progress to stderr.
 
-The subagent will:
-1. Call `mcp__capiq__pull_comps` with the tickers and parameters
-2. Format the result as a professional markdown table
-3. Return the table to you
-
-**Present the agent's formatted table directly to the user.** Include any resolution notes or warnings the agent reports.
+Present the markdown table output directly to the user. If there are resolution warnings (RESOLVED or FAILED tickers), report them.
 
 ## Defaults summary
 
 | Setting | Default | Override |
 |---|---|---|
 | Currency | **CAD** | "in USD" or "--currency USD" |
-| Mode | **Lease Adjusted** | "excluding leases" or "--excluding-leases" |
-| NTM lease adj | **ON** | "no lease adjust" or "--no-lease-adjust" |
-| Date | **Today** | "as of M/D/YYYY" |
+| Mode | **Lease Adjusted** | "excluding leases" or "--mode excluding-leases" |
+| NTM lease adj | **ON** | "no lease adjust" or "--no-lease-adjust-ntm" |
+| Date | **Today** | "as of M/D/YYYY" or "--date M/D/YYYY" |
