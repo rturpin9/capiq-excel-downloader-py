@@ -65,7 +65,6 @@ capiq_excel/                     # Core library — Excel COM automation for CIQ
 
 pull_comps.py                    # Standalone CLI for comp tables (thin wrapper over engines.comps)
 
-.claude/agents/capiq-analyst.md  # Subagent: Capital IQ analyst (comps, charts, ID lookup)
 .claude/skills/comps/SKILL.md    # /comps skill definition
 .claude/skills/chart/SKILL.md    # /chart skill definition
 ```
@@ -217,7 +216,7 @@ python pull_comps.py DSGX ROP MANH --currency USD --mode excluding-leases
 - Working example scripts: `comp_table.py` (single-value CIQ), `ev_multiples_chart.py` (CIQRANGEV time series), `indexed_equity_chart.py` (CIQRANGE market data)
 - `MetricType` enum replaces stringly-typed `metric_type` field — use `MetricType.FINANCIAL`, `.MARKET`, `.OWNERSHIP`, `.ESTIMATES`, `.ID_LOOKUP`
 - `extract.py` uses batch COM reads (`Range().Value`) instead of cell-by-cell — orders of magnitude faster for large datasets
-- `capiq_excel/engines/` exposes `comps`, `chart`, and `id_lookup` engines, used by the `capiq` CLI and Claude Code skills/subagents
+- `capiq_excel/engines/` exposes `comps`, `chart`, and `id_lookup` engines, used by the `capiq` CLI and Claude Code skills
 - `capiq chart` supports three metric types: `market` (CIQRANGE date range), `multiple` (CIQRANGEV period+range), `financial` (CIQRANGE period offset) — and four chart types: `line`, `bar`, `line_marker`, `dual_axis`
-- Subagent in `.claude/agents/capiq-analyst.md`; skills in `.claude/skills/comps/SKILL.md` and `.claude/skills/chart/SKILL.md`
+- Skills in `.claude/skills/comps/SKILL.md` and `.claude/skills/chart/SKILL.md`
 - `excel_lifecycle.py` is shared infrastructure used by `capiq_excel.engines` and `capiq_excel.workbook` — logger is `capiq_excel`
