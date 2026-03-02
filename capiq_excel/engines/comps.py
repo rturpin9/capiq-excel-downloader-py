@@ -117,7 +117,7 @@ EXTRA_METRICS_CATALOG: dict[str, ExtraMetricSpec] = {s.key: s for s in [
     _extra("capex-pct-rev","CapEx % Rev",        "IQ_CAPEX_PCT_REV",        "ltm_raw", "pct",    True),
     _extra("current-ratio","Current Ratio",      "IQ_CURRENT_RATIO",        "bs",      "mult",   True),
     _extra("debt-equity",  "Debt/Equity",        "IQ_TOTAL_DEBT_EQUITY",    "ltm_raw", "mult",   True),
-    _extra("employees",    "Employees",          "IQ_EMPLOYEES",            "bs",      "dollar", False),
+    _extra("employees",    "Employees",          "IQ_TOTAL_EMPLOYEES",      "fy",      "count",  False),
 ]}
 
 
@@ -137,15 +137,34 @@ def resolve_extras(keys: list[str]) -> tuple[list[ExtraMetricSpec], list[tuple]]
 
 # ── Formula builders ───────────────────────────────────────────────────────
 
+def _build_ciq_formula(id_expr: str, mnemonic: str, call_type: str,
+                       date: str, curr_opt: str) -> str:
+    """Build a CIQ() formula string for IQ_ mnemonics."""
+    m = f'"{mnemonic}"'
+    d = f'"{date}"'
+    c = f'"{curr_opt}"'
+
+    if call_type in ("name", "gaap"):
+        return f"=CIQ({id_expr}, {m})"
+    elif call_type == "market":
+        return f"=CIQ({id_expr}, {m}, {d},,,,, {c})"
+    elif call_type == "bs":
+        return f'=CIQ({id_expr}, {m}, "IQ_FQ", {d},,,,, {c})'
+    elif call_type == "ltm":
+        return f'=CIQ({id_expr}, {m}, "IQ_LTM", {d},,,,, {c})'
+    elif call_type == "ntm":
+        return f'=CIQ({id_expr}, {m}, "IQ_NTM", {d},,,,, {c})'
+    elif call_type == "ltm_raw":
+        return f'=CIQ({id_expr}, {m}, "IQ_LTM", {d})'
+    elif call_type == "fy":
+        return f'=CIQ({id_expr}, {m}, "IQ_FY", {d},,,,, {c})'
+    else:
+        raise ValueError(f"Unknown call_type: {call_type}")
+
+
 def _build_spg_formula(id_expr: str, mnemonic: str, call_type: str,
                        date: str, curr_opt: str) -> str:
-    """Build an SPG formula string for a given metric type.
-
-    Parameters
-    ----------
-    id_expr : str
-        Either a quoted ticker like ``'"DSGX"'`` or a cell reference like ``'$P$2'``.
-    """
+    """Build an SPG() formula string for SP_ mnemonics."""
     m = f'"{mnemonic}"'
     d = f'"{date}"'
     c = f'"{curr_opt}"'
@@ -162,27 +181,41 @@ def _build_spg_formula(id_expr: str, mnemonic: str, call_type: str,
         return f'=SPG({id_expr}, {m}, "NTM", {d}, {c})'
     elif call_type == "ltm_raw":
         return f'=SPG({id_expr}, {m}, "LTM", {d})'
-    elif call_type == "gaap":
-        return f'=CIQ({id_expr}, {m})'
+    elif call_type == "fy":
+        return f'=SPG({id_expr}, {m}, "FY0", {d}, {c})'
     else:
         raise ValueError(f"Unknown call_type: {call_type}")
 
 
-def build_spg_formula(ticker: str, mnemonic: str, call_type: str,
-                      date: str, curr_opt: str) -> str:
-    """Build an SPG formula string with a quoted ticker identifier."""
-    return _build_spg_formula(f'"{ticker}"', mnemonic, call_type, date, curr_opt)
+def _build_formula(id_expr: str, mnemonic: str, call_type: str,
+                   date: str, curr_opt: str) -> str:
+    """Route to CIQ() or SPG() based on mnemonic prefix.
+
+    IQ_ mnemonics → CIQ(), SP_ mnemonics → SPG().
+    """
+    if mnemonic.startswith("IQ_"):
+        return _build_ciq_formula(id_expr, mnemonic, call_type, date, curr_opt)
+    else:
+        return _build_spg_formula(id_expr, mnemonic, call_type, date, curr_opt)
+
+
+def build_formula(ticker: str, mnemonic: str, call_type: str,
+                  date: str, curr_opt: str) -> str:
+    """Build a CIQ/SPG formula string with a quoted ticker identifier."""
+    return _build_formula(f'"{ticker}"', mnemonic, call_type, date, curr_opt)
 
 
 # ── Workbook creation ──────────────────────────────────────────────────────
 
 def build_workbook(path: str, tickers: list[str], metrics: list,
                    date: str, curr_opt: str) -> None:
-    """Build workbook with primary SPG formulas + CIQRANGEA fallback.
+    """Build workbook with primary CIQ/SPG formulas + CIQRANGEA fallback.
 
     Layout per company (two rows):
-      Row N (primary):  ticker in col A, SPG formulas using original ticker
-      Row N+1 (fallback): SPG formulas using CIQRANGEA-resolved IQ ID via cell ref
+      Row N (primary):  ticker in col A, formulas using original ticker
+      Row N+1 (fallback): formulas using CIQRANGEA-resolved IQ ID via cell ref
+
+    IQ_ mnemonics route through CIQ(), SP_ mnemonics through SPG().
 
     CIQRANGEA columns sit after the metrics:
       col M+2: =CIQRANGEA(ticker, "IQ_COMPANY_ID_QUICK_MATCH", 1, 1)
@@ -221,8 +254,8 @@ def build_workbook(path: str, tickers: list[str], metrics: list,
         primary_row = 2 + comp_idx * 2
         ws.cell(row=primary_row, column=1, value=plain_ticker)
         for col_idx, (_, mnemonic, call_type) in enumerate(metrics, start=2):
-            formula = build_spg_formula(plain_ticker, mnemonic, call_type,
-                                        date, curr_opt)
+            formula = build_formula(plain_ticker, mnemonic, call_type,
+                                    date, curr_opt)
             ws.cell(row=primary_row, column=col_idx, value=formula)
 
         # CIQRANGEA lookup on primary row (also uses plain ticker)
@@ -230,13 +263,13 @@ def build_workbook(path: str, tickers: list[str], metrics: list,
         ws.cell(row=primary_row, column=ciqrangea_col,
                 value=f'=CIQRANGEA("{lookup_id}","IQ_COMPANY_ID_QUICK_MATCH",1,1)')
 
-        # Fallback row: SPG formulas referencing the CIQRANGEA spill cell
+        # Fallback row: formulas referencing the CIQRANGEA spill cell
         fallback_row = primary_row + 1
         spill_ref = f"${spill_col_letter}${primary_row}"
         ws.cell(row=fallback_row, column=1, value=f"(fallback for {ticker})")
         for col_idx, (_, mnemonic, call_type) in enumerate(metrics, start=2):
-            formula = _build_spg_formula(spill_ref, mnemonic, call_type,
-                                         date, curr_opt)
+            formula = _build_formula(spill_ref, mnemonic, call_type,
+                                     date, curr_opt)
             ws.cell(row=fallback_row, column=col_idx, value=formula)
 
     wb.save(path)
@@ -528,7 +561,7 @@ def _make_round_fn(extra_specs: list[ExtraMetricSpec] | None = None):
     round_1 = set(_ROUND_1)
     round_2 = set(_ROUND_2)
     for spec in (extra_specs or []):
-        if spec.fmt == "dollar":
+        if spec.fmt in ("dollar", "count"):
             round_0.add(spec.label)
         elif spec.fmt == "pct":
             round_1.add(spec.label)

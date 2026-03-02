@@ -56,6 +56,16 @@ def _fmt_pct(val) -> str:
         return "N/A"
 
 
+def _fmt_count(val) -> str:
+    """Format a count value as X,XXX (no decimals, no dollar sign)."""
+    if pd.isna(val):
+        return "N/A"
+    try:
+        return f"{val:,.0f}"
+    except (ValueError, TypeError):
+        return "N/A"
+
+
 def _fmt_str(val) -> str:
     """Format a string value."""
     if pd.isna(val) or val is None:
@@ -158,7 +168,7 @@ def _format_comps_markdown(
 
     # Append extra columns dynamically
     for spec in (extra_specs or []):
-        fmt_fn = {"pct": _fmt_pct, "dollar": _fmt_dollar, "mult": _fmt_mult}[spec.fmt]
+        fmt_fn = {"pct": _fmt_pct, "dollar": _fmt_dollar, "mult": _fmt_mult, "count": _fmt_count}[spec.fmt]
         cols.append((spec.label, fmt_fn, spec.is_summary))
 
     # Header
