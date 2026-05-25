@@ -176,6 +176,7 @@ def launch_excel_isolated(
         wb_name,
         interval=rot_poll_interval,
         timeout=rot_poll_timeout,
+        full_path=abs_path,
     )
 
     # Suppress modal dialogs that would block COM calls from MCP/headless callers.
@@ -265,10 +266,16 @@ def close_session(
 # ── ROT helpers ──────────────────────────────────────────────────────────
 
 
-def _find_workbook_in_rot(workbook_name: str):
+def _find_workbook_in_rot(workbook_name: str, full_path: Optional[str] = None):
     """Search the Running Object Table for a workbook by filename.
 
     Adapted from exceldriver.tools._get_excel_running_workbook().
+
+    When *full_path* is provided, an exact (case-insensitive) path match is
+    preferred and short-circuits the scan — this binds precisely to the
+    workbook we launched instead of risking a same-basename workbook open in a
+    different folder/instance (which close_session would then Quit and delete).
+    A basename-suffix match is kept as a fallback for resilience.
 
     Returns
     -------
@@ -279,7 +286,9 @@ def _find_workbook_in_rot(workbook_name: str):
     rot = pythoncom.GetRunningObjectTable()
     rotenum = rot.EnumRunning()
     target_len = len(workbook_name)
-    obj = None
+    exact_target = os.path.normcase(os.path.abspath(full_path)) if full_path else None
+    exact_obj = None    # matched by full path (preferred)
+    suffix_obj = None   # matched by basename suffix (fallback)
 
     while True:
         monikers = rotenum.Next()
@@ -288,11 +297,15 @@ def _find_workbook_in_rot(workbook_name: str):
         try:
             ctx = pythoncom.CreateBindCtx(0)
             display_name = monikers[0].GetDisplayName(ctx, None)
+            if exact_target is not None and os.path.normcase(display_name) == exact_target:
+                exact_obj = rot.GetObject(monikers[0])
+                break  # definitively our workbook — stop scanning
             if display_name[-target_len:] == workbook_name:
-                obj = rot.GetObject(monikers[0])
+                suffix_obj = rot.GetObject(monikers[0])
         except Exception:
             continue
 
+    obj = exact_obj if exact_obj is not None else suffix_obj
     if obj is None:
         return None
 
@@ -306,6 +319,7 @@ def _poll_rot_for_workbook(
     workbook_name: str,
     interval: float = 2.0,
     timeout: float = 60.0,
+    full_path: Optional[str] = None,
 ):
     """Poll the ROT until the workbook appears, with timeout.
 
@@ -324,7 +338,7 @@ def _poll_rot_for_workbook(
         attempt += 1
         log.debug("ROT poll attempt %d (%.1fs elapsed)", attempt,
                   timeout - (deadline - time.monotonic()))
-        result = _find_workbook_in_rot(workbook_name)
+        result = _find_workbook_in_rot(workbook_name, full_path=full_path)
         if result is not None:
             log.info("Found workbook '%s' in ROT after %.1fs",
                      workbook_name, timeout - (deadline - time.monotonic()))

@@ -200,8 +200,14 @@ def _format_comps_markdown(
         return row_lines
 
     if groups:
+        # The stored Ticker column has US exchange prefixes stripped (see
+        # comps.build_workbook), so strip the group tickers the same way before
+        # matching — otherwise "NYSE:HAL" never matches the stored "HAL" and the
+        # whole US section silently drops out.
+        from capiq_excel.engines.comps import strip_us_exchange_prefix
         for group_name, group_tickers in groups.items():
-            group_df = df[df["Ticker"].isin(group_tickers)]
+            stripped_tickers = [strip_us_exchange_prefix(t) for t in group_tickers]
+            group_df = df[df["Ticker"].isin(stripped_tickers)]
             if group_df.empty:
                 continue
             lines.append(f"### {group_name}")

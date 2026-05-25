@@ -487,10 +487,8 @@ def _render_line_chart(
         if num_points == 0:
             continue
 
-        # Synthesize dates from known range
         end_dt = pd.Timestamp(end_date)
         start_dt = pd.Timestamp(start_date)
-        dates = pd.date_range(start=start_dt, end=end_dt, periods=num_points)
 
         display_name = _display_name(ticker, ticker_names)
 
@@ -499,7 +497,11 @@ def _render_line_chart(
             if not values:
                 continue
 
-            series = pd.Series(values, index=dates[:len(values)])
+            # Build a date axis sized to THIS metric so a shorter series still
+            # spans the full [start, end] range instead of being compressed into
+            # the earliest dates of a longer metric's axis.
+            dates = pd.date_range(start=start_dt, end=end_dt, periods=len(values))
+            series = pd.Series(values, index=dates)
             series = series.dropna()
             if len(series) == 0:
                 continue
@@ -720,9 +722,10 @@ def _render_dual_axis_chart(
 
                 end_dt = pd.Timestamp(end_date)
                 start_dt = pd.Timestamp(start_date)
-                dates = pd.date_range(start=start_dt, end=end_dt, periods=num_points)
+                # Size the axis to this metric's own length (see _render_line_chart).
+                dates = pd.date_range(start=start_dt, end=end_dt, periods=len(values))
 
-                series = pd.Series(values, index=dates[:len(values)]).dropna()
+                series = pd.Series(values, index=dates).dropna()
                 if len(series) == 0:
                     continue
 
@@ -868,6 +871,15 @@ def run_chart(
         raise ValueError(f"Invalid chart_type '{chart_type}'. Use: {VALID_CHART_TYPES}")
     if chart_type == "dual_axis" and len(metrics) != 2:
         raise ValueError("dual_axis chart requires exactly 2 metrics")
+
+    # The plain "line" renderer synthesizes an evenly-spaced date axis from a
+    # point count, which financial data (grouped by explicit period dates) does
+    # not provide — it would render an empty chart.  Route financial line
+    # charts to the marker renderer, which plots against the real period dates.
+    if metric_type == "financial" and chart_type == "line":
+        log.info("metric_type=financial: rendering 'line_marker' instead of 'line' "
+                 "(plain line needs synthesized market dates)")
+        chart_type = "line_marker"
 
     # ── Resolve dates ──
     now = datetime.now()

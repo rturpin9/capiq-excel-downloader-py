@@ -48,8 +48,10 @@ def populate_capiq_for_file(filepath, excel, financial_data_items_dict: Dict[str
     if config is not None:
         restart_interval = config.retry.restart_interval
 
-    # Even if things are going normally, restart every N worksheets as there is a memory leak
-    if index % restart_interval == 0 and retries_remaining == 3:
+    # Even if things are going normally, restart every N worksheets as there is a memory leak.
+    # Guard against restart_interval == 0 (e.g. CAPIQ_RESTART_INTERVAL=0 meaning "never
+    # restart"), which would otherwise raise ZeroDivisionError on the modulo.
+    if restart_interval > 0 and index % restart_interval == 0 and retries_remaining == 3:
         excel = _restart_excel_with_addins_and_attach()
 
     # Stop retries

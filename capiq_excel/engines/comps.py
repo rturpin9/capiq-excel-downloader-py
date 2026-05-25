@@ -29,8 +29,31 @@ _US_EXCHANGES = frozenset({
 
 _ERROR_TOKENS = (
     "#ERROR", "#INVALID", "#PEND", "#REFRESH", "#NAME",
-    "#OUTSIDE", "KEYERROR", "DEFUNCT", "INVALID", "NM", "(INVALID",
+    "#OUTSIDE", "KEYERROR", "DEFUNCT", "INVALID", "(INVALID",
 )
+
+# Error markers that must match the *entire* (stripped) cell value rather than
+# as a substring.  "NM" ("not meaningful") is too short to substring-match
+# safely — e.g. a company named "NMI Holdings" contains "NM".
+_ERROR_EXACT_TOKENS = frozenset({"NM"})
+
+
+def strip_us_exchange_prefix(ticker: str) -> str:
+    """Strip a US exchange prefix from a ticker, e.g. ``NYSE:HAL`` -> ``HAL``.
+
+    SPG validates US exchange prefixes against the actual listing exchange, so
+    ``NYSE:WMT`` fails because WMT is on NASDAQGS; plain US tickers resolve
+    fine.  Non-US prefixes (TSX, LSE, ASX, ...) are preserved because plain
+    tickers don't resolve reliably for international listings.
+
+    This is the canonical transform applied when building the comp workbook, so
+    downstream consumers (e.g. the ``--groups`` filter) can compare against the
+    same stored ticker form.
+    """
+    prefix, _, sym = ticker.partition(":")
+    if sym and prefix.upper() in _US_EXCHANGES:
+        return sym
+    return ticker
 
 # ── Metric definitions ─────────────────────────────────────────────────────
 
@@ -187,16 +210,37 @@ def _build_spg_formula(id_expr: str, mnemonic: str, call_type: str,
         raise ValueError(f"Unknown call_type: {call_type}")
 
 
+def _spg_options_with_millions(curr_opt: str) -> str:
+    """Force SP_ values to Millions so they line up with CIQ's IQ_ values.
+
+    SPG returns SP_ mnemonics in *thousands* by default, while CIQ returns IQ_
+    mnemonics in *millions*.  Without pinning the magnitude the two are 1000x
+    apart, so mixed ratios such as EV/NTM EBITDA (TEV from IQ_ ÷ EBITDA from
+    SP_) collapse to ~0.  The magnitude is only honored when the options string
+    keeps the "Options:" prefix (the plugin silently ignores a bare
+    "Curr=...,Mag=..." string).
+
+    Note: Mag is deliberately NOT added to CIQ formulas — the longer options
+    string overflows CIQ's market-data currency parameter, yielding
+    "(Parameter Length Limit Exceeded)"; CIQ already returns millions anyway.
+    """
+    if "mag=" in curr_opt.lower():
+        return curr_opt
+    return f"{curr_opt},Mag=Millions"
+
+
 def _build_formula(id_expr: str, mnemonic: str, call_type: str,
                    date: str, curr_opt: str) -> str:
     """Route to CIQ() or SPG() based on mnemonic prefix.
 
-    IQ_ mnemonics → CIQ(), SP_ mnemonics → SPG().
+    IQ_ mnemonics → CIQ(), SP_ mnemonics → SPG().  SPG formulas get an explicit
+    Mag=Millions so SP_ values match CIQ's millions magnitude.
     """
     if mnemonic.startswith("IQ_"):
         return _build_ciq_formula(id_expr, mnemonic, call_type, date, curr_opt)
     else:
-        return _build_spg_formula(id_expr, mnemonic, call_type, date, curr_opt)
+        return _build_spg_formula(id_expr, mnemonic, call_type, date,
+                                  _spg_options_with_millions(curr_opt))
 
 
 def build_formula(ticker: str, mnemonic: str, call_type: str,
@@ -241,16 +285,8 @@ def build_workbook(path: str, tickers: list[str], metrics: list,
     spill_col_letter = get_column_letter(ciqrangea_spill_col)
 
     for comp_idx, ticker in enumerate(tickers):
-        # Strip US exchange prefixes — SPG validates them against the actual
-        # listing exchange, so NYSE:WMT fails because WMT is on NASDAQGS.
-        # Plain tickers resolve fine for US stocks.  Non-US prefixes (TSX,
-        # LSE, ASX, etc.) are kept because plain tickers don't resolve
-        # reliably for international listings.
-        prefix, _, sym = ticker.partition(":")
-        if sym and prefix.upper() in _US_EXCHANGES:
-            plain_ticker = sym
-        else:
-            plain_ticker = ticker
+        # Strip US exchange prefixes so SPG resolves them (see helper docstring).
+        plain_ticker = strip_us_exchange_prefix(ticker)
         primary_row = 2 + comp_idx * 2
         ws.cell(row=primary_row, column=1, value=plain_ticker)
         for col_idx, (_, mnemonic, call_type) in enumerate(metrics, start=2):
@@ -290,7 +326,7 @@ def safe_float(val) -> float:
         return float(val)
     if isinstance(val, str):
         upper = val.upper()
-        if any(tok in upper for tok in _ERROR_TOKENS):
+        if upper.strip() in _ERROR_EXACT_TOKENS or any(tok in upper for tok in _ERROR_TOKENS):
             return np.nan
         try:
             return float(val.replace(",", ""))
@@ -307,16 +343,23 @@ def is_error_value(val) -> bool:
         return True
     if isinstance(val, str):
         upper = val.upper()
-        return any(tok in upper for tok in _ERROR_TOKENS)
+        return upper.strip() in _ERROR_EXACT_TOKENS or any(tok in upper for tok in _ERROR_TOKENS)
     return False
 
 
-def safe_div(num: float, denom: float) -> float:
-    """Safe division returning NaN for invalid or non-positive results."""
+def safe_div(num: float, denom: float, allow_negative: bool = False) -> float:
+    """Safe division returning NaN for invalid (and, by default, non-positive) results.
+
+    EV multiples are suppressed when non-positive (a negative multiple is not
+    meaningful), but some ratios — notably Net Debt / EBITDA — are legitimately
+    negative for net-cash companies, so pass allow_negative=True to keep them.
+    """
     if np.isnan(num) or np.isnan(denom) or denom == 0:
         return np.nan
     result = num / denom
-    return result if result > 0 else np.nan
+    if not allow_negative and result <= 0:
+        return np.nan
+    return result
 
 
 # ── Result reading ─────────────────────────────────────────────────────────
@@ -438,7 +481,11 @@ def build_table_lease_adjusted(results: list[dict], lease_adjust_ntm: bool,
         ntm_ebitda = ntm_ebitda_raw
         adj_applied = False
         if lease_adjust_ntm and not np.isnan(ntm_ebitda_raw) and not np.isnan(lease_adj):
-            if isinstance(gaap, str) and "IFRS" not in gaap.upper():
+            # Only treat as US GAAP (and add the lease adjustment) when the GAAP
+            # lookup returned a real, non-IFRS value.  An errored/blank GAAP cell
+            # must NOT default to US-GAAP treatment, or an IFRS filer whose
+            # lookup failed would be double-counted.
+            if isinstance(gaap, str) and not is_error_value(gaap) and "IFRS" not in gaap.upper():
                 ntm_ebitda = ntm_ebitda_raw + lease_adj
                 adj_applied = True
 
@@ -451,7 +498,7 @@ def build_table_lease_adjusted(results: list[dict], lease_adjust_ntm: bool,
         capex = abs(capex_raw) if not np.isnan(capex_raw) else np.nan
 
         ebitda_margin = safe_div(ltm_ebitda, ltm_rev)
-        nd_ebitda = safe_div(net_debt, ltm_ebitda)
+        nd_ebitda = safe_div(net_debt, ltm_ebitda, allow_negative=True)
 
         row = {
             "Company": name,
@@ -514,7 +561,7 @@ def build_table_excluding_leases(results: list[dict],
         capex = abs(capex_raw) if not np.isnan(capex_raw) else np.nan
 
         ebitda_margin = safe_div(ltm_ebitda, ltm_rev)
-        nd_ebitda = safe_div(net_debt, ltm_ebitda)
+        nd_ebitda = safe_div(net_debt, ltm_ebitda, allow_negative=True)
 
         row = {
             "Company": name,

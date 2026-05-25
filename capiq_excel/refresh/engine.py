@@ -158,6 +158,25 @@ def _trigger_pro_refresh(excel, scope: RefreshScope) -> None:
         logger.warning("Failed to invoke Pro refresh macro %s, falling back to polling", macro, exc_info=True)
 
 
+def _classify_cell_token(val_lower: str) -> Optional[tuple[str, str]]:
+    """Classify a normalized (lowercased, stripped) cell value by status token.
+
+    Pending tokens are checked BEFORE error tokens.  This is required because
+    the legacy bare-"refresh" error token is a substring of the pending marker
+    "#refresh"; checking errors first would misclassify a cell that is merely
+    still refreshing as a hard error and abort the whole refresh.
+
+    Returns ("pending", token) / ("error", token), or None if no token matches.
+    """
+    for tok in PENDING_TOKENS:
+        if tok in val_lower:
+            return "pending", tok
+    for tok in ALL_ERROR_TOKENS:
+        if tok in val_lower:
+            return "error", tok
+    return None
+
+
 def _check_readiness(excel) -> tuple[str, Optional[str]]:
     """
     Check whether the active sheet has finished evaluating.
@@ -166,8 +185,9 @@ def _check_readiness(excel) -> tuple[str, Optional[str]]:
     status/error tokens from CIQ and SPG/SNL. This covers both data worksheets
     (formulas in column A) and ID lookup worksheets (formulas in columns B/D).
 
-    Also checks if formula cells have resolved — if a cell has a formula but
-    its value is 0/empty/None, the formula likely hasn't been evaluated yet.
+    Also checks if formula cells have resolved — a formula cell whose value is
+    still None (or a COM #NAME? error code) likely hasn't been evaluated yet.
+    A resolved 0 / "" is treated as valid data, not as "unresolved".
 
     Returns:
         ("ready", None)          - data is present, no error/pending tokens
@@ -196,8 +216,11 @@ def _check_readiness(excel) -> tuple[str, Optional[str]]:
                     # the UDF hasn't registered yet — still pending
                     if isinstance(cell_val, int) and cell_val < -2000000000:
                         has_unresolved_formula = True
-                    # Formula cell with 0, empty, or None = likely unevaluated
-                    elif cell_val is None or cell_val == 0 or cell_val == "":
+                    # A formula cell with no value yet is likely still evaluating.
+                    # NOTE: do NOT treat 0 / 0.0 / "" as unresolved — those are
+                    # legitimate results (e.g. zero debt) and previously caused
+                    # refresh_and_wait to hang until timeout on valid data.
+                    elif cell_val is None:
                         has_unresolved_formula = True
             except Exception:
                 logger.debug("Could not read formula status from cell(%d, %d)", row, col, exc_info=True)
@@ -211,15 +234,10 @@ def _check_readiness(excel) -> tuple[str, Optional[str]]:
 
             found_any_data = True
 
-            # Check for hard error states
-            for tok in ALL_ERROR_TOKENS:
-                if tok in val_lower:
-                    return "error", tok
-
-            # Check for pending states
-            for tok in PENDING_TOKENS:
-                if tok in val_lower:
-                    return "pending", tok
+            # Classify by status token (pending checked before error).
+            classification = _classify_cell_token(val_lower)
+            if classification is not None:
+                return classification
 
     # If we found no data at all, still pending
     if not found_any_data:
