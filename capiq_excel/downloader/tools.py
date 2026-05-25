@@ -5,7 +5,10 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 from capiq_excel.fileops import get_path_of_failed_folder_add_if_necessary, move_file_to_failed_folder, get_path_of_additional_failed_folder_add_if_necessary
 from capiq_excel.workbook.populate.main import populate_capiq_for_file
-from exceldriver.tools import _start_excel_with_addins_and_attach, _restart_excel_with_addins_and_attach
+from capiq_excel.excel_lifecycle import (
+    start_excel_with_addins_and_attach as _start_excel_with_addins_and_attach,
+    restart_excel_with_addins_and_attach as _restart_excel_with_addins_and_attach,
+)
 from processfiles.files import FileProcessTracker
 
 

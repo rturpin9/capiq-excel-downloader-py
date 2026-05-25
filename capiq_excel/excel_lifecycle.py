@@ -19,8 +19,78 @@ import win32api
 import win32com.client
 
 from exceldriver.path import get_excel_path
+from exceldriver.tools import (
+    _start_excel_with_addins_and_attach as _ed_start_excel,
+    _restart_excel_with_addins_and_attach as _ed_restart_excel,
+)
 
 log = logging.getLogger("capiq_excel")
+
+
+# ── Visibility control ─────────────────────────────────────────────────────
+# Excel is hidden by default so automated runs (comps / chart / lookup and the
+# batch download pipeline) don't pop a window or steal focus.  Set the env var
+# CAPIQ_EXCEL_VISIBLE=1 (or pass visible=True) to show Excel for debugging.
+
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _env_visible_default() -> bool:
+    """Default Excel visibility from the environment — hidden unless opted in.
+
+    Returns True only when CAPIQ_EXCEL_VISIBLE is set to a truthy value
+    (1/true/yes/on); otherwise False (hidden).
+    """
+    raw = os.environ.get("CAPIQ_EXCEL_VISIBLE")
+    if raw is None:
+        return False
+    return raw.strip().lower() in _TRUTHY
+
+
+def _resolve_visible(visible: Optional[bool]) -> bool:
+    """An explicit argument always wins; otherwise use the env default."""
+    return _env_visible_default() if visible is None else bool(visible)
+
+
+def apply_excel_visibility(excel, visible: Optional[bool] = None) -> bool:
+    """Best-effort set Excel window visibility.  Never raises.
+
+    Should be called on a fully-initialized Excel.Application (i.e. after the
+    add-ins have loaded and UDFs registered) so it can't interfere with UDF
+    registration or the add-in's window-handle acquisition.
+
+    Returns the effective visibility that was requested.
+    """
+    eff = _resolve_visible(visible)
+    try:
+        excel.Visible = eff
+    except Exception:
+        log.debug("Could not set Excel.Visible=%s", eff, exc_info=True)
+    return eff
+
+
+def start_excel_with_addins_and_attach(*args, visible: Optional[bool] = None, **kwargs):
+    """exceldriver `_start_excel_with_addins_and_attach` + visibility control.
+
+    Launches Excel and waits for add-ins to attach (exceldriver handles the
+    subprocess launch and UDF-safe startup), then applies the requested
+    visibility.  Used by the legacy download / ids pipeline so it honors
+    CAPIQ_EXCEL_VISIBLE the same way as `launch_excel_isolated`.
+    """
+    excel = _ed_start_excel(*args, **kwargs)
+    apply_excel_visibility(excel, visible)
+    return excel
+
+
+def restart_excel_with_addins_and_attach(*args, visible: Optional[bool] = None, **kwargs):
+    """exceldriver `_restart_excel_with_addins_and_attach` + visibility control.
+
+    Used in the batch pipeline's restart/retry loops so Excel stays hidden
+    across mid-job restarts.
+    """
+    excel = _ed_restart_excel(*args, **kwargs)
+    apply_excel_visibility(excel, visible)
+    return excel
 
 
 @dataclass
@@ -39,6 +109,7 @@ def launch_excel_isolated(
     addin_poll_interval: float = 2.0,
     rot_poll_interval: float = 2.0,
     rot_poll_timeout: float = 60.0,
+    visible: Optional[bool] = None,
 ) -> ExcelSession:
     """Launch Excel in a new isolated process and connect via the ROT.
 
@@ -58,6 +129,11 @@ def launch_excel_isolated(
         Seconds between ROT polling attempts (default 2).
     rot_poll_timeout : float
         Max seconds to poll the ROT before giving up (default 60).
+    visible : bool, optional
+        Whether the Excel window should be shown.  Default None resolves to
+        the CAPIQ_EXCEL_VISIBLE env var (hidden unless set truthy).  Excel is
+        launched, add-ins initialize, UDFs register, and only *then* is the
+        window hidden — so visibility never affects data retrieval.
 
     Returns
     -------
@@ -66,6 +142,7 @@ def launch_excel_isolated(
     """
     abs_path = os.path.abspath(workbook_path)
     wb_name = os.path.basename(abs_path)
+    eff_visible = _resolve_visible(visible)
 
     if not os.path.exists(abs_path):
         raise FileNotFoundError(f"Workbook not found: {abs_path}")
@@ -78,14 +155,18 @@ def launch_excel_isolated(
     # tree and any Windows Job Objects constraining it.  subprocess.Popen
     # creates a child process that inherits the parent's job object, which
     # can block Excel from launching until the parent is interrupted.
-    log.info("Launching Excel via ShellExecute: %s /x %s", excel_exe, abs_path)
+    # SW_SHOWNORMAL (1) when visible; SW_SHOWMINNOACTIVE (7) when hiding, so the
+    # launch doesn't grab focus before we hide the window after add-ins init.
+    show_cmd = 1 if eff_visible else 7
+    log.info("Launching Excel via ShellExecute: %s /x %s (visible=%s)",
+             excel_exe, abs_path, eff_visible)
     win32api.ShellExecute(
         0,                       # hwnd (no parent window)
         "open",                  # verb
         excel_exe,               # program
         f'/x "{abs_path}"',      # parameters
         None,                    # working directory
-        1,                       # SW_SHOWNORMAL
+        show_cmd,                # SW_SHOWNORMAL (visible) / SW_SHOWMINNOACTIVE (hidden)
     )
     log.info("ShellExecute returned — Excel launch initiated")
 
@@ -112,6 +193,12 @@ def launch_excel_isolated(
     log.info("Phase 1 complete. Phase 2: Waiting for UDFs ...")
     _wait_for_udfs(app, timeout=addin_init_timeout, interval=addin_poll_interval)
     log.info("Phase 2 complete. Excel session ready.")
+
+    # Add-ins are now fully initialized and UDFs are registered — safe to hide
+    # the window.  Doing it here (rather than at launch) guarantees visibility
+    # never interferes with UDF registration or data retrieval.
+    apply_excel_visibility(app, eff_visible)
+    log.info("Excel visibility set to %s", eff_visible)
 
     return ExcelSession(
         workbook_path=abs_path,

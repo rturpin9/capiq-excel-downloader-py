@@ -22,7 +22,7 @@ def _resolve_config_dialect(config: CapiqConfig) -> CapiqConfig:
     try:
         import time
         from capiq_excel.runtime.addin_detection import detect_runtime
-        from exceldriver.tools import _start_excel_with_addins_and_attach
+        from capiq_excel.excel_lifecycle import start_excel_with_addins_and_attach as _start_excel_with_addins_and_attach
         print('Detecting runtime environment...')
         excel = _start_excel_with_addins_and_attach()
         time.sleep(3)  # give add-ins time to load

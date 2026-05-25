@@ -386,7 +386,7 @@ def _cmd_status() -> int:
     import os
     for var in ("CAPIQ_FORMULA_DIALECT", "CAPIQ_ADDIN_MODE", "CAPIQ_REFRESH_SCOPE",
                 "CAPIQ_FREQ", "CAPIQ_NUM_PERIODS", "CAPIQ_TIMEOUT", "CAPIQ_MAX_RETRIES",
-                "CAPIQ_RESTART_INTERVAL"):
+                "CAPIQ_RESTART_INTERVAL", "CAPIQ_EXCEL_VISIBLE"):
         val = os.environ.get(var)
         print(f"  {var} = {val or '(not set)'}")
     return 0
@@ -396,7 +396,7 @@ def _cmd_detect_addins() -> int:
     """Detect installed add-ins by starting Excel and scanning COM."""
     print("Starting Excel and scanning for Capital IQ add-ins...")
     try:
-        from exceldriver.tools import _start_excel_with_addins_and_attach
+        from capiq_excel.excel_lifecycle import start_excel_with_addins_and_attach as _start_excel_with_addins_and_attach
         from capiq_excel.runtime.addin_detection import detect_runtime
     except ImportError as e:
         print(f"Error: Required packages not available: {e}")

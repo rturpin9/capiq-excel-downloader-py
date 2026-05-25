@@ -2,7 +2,7 @@ import math
 from typing import Sequence, List
 import pandas as pd
 
-from exceldriver.tools import _start_excel_with_addins_and_attach
+from capiq_excel.excel_lifecycle import start_excel_with_addins_and_attach as _start_excel_with_addins_and_attach
 from processfiles.files import FileProcessTracker
 from capiq_excel.workbook.populate.main import populate_capiq_ids_for_file
 from capiq_excel.workbook.create import create_all_xlsx_with_id_commands

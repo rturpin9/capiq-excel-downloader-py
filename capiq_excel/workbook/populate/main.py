@@ -7,7 +7,7 @@ import pythoncom
 from win32com.client import constants
 from pywintypes import com_error
 
-from exceldriver.tools import _restart_excel_with_addins_and_attach
+from capiq_excel.excel_lifecycle import restart_excel_with_addins_and_attach as _restart_excel_with_addins_and_attach
 from capiq_excel.workbook.wait import _wait_for_capiq_result
 from capiq_excel.exceptions import WorkbookClosedException, CapitalIQInactiveException
 from capiq_excel.workbook.populate.extract import extract_capiq_df_from_sheet
