@@ -274,7 +274,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # --- comps ---
     cp = sub.add_parser("comps", help="Pull comparable companies analysis table via SPG formulas")
-    cp.add_argument("tickers", nargs="+",
+    cp.add_argument("tickers", nargs="*",
                     help="Company tickers (e.g. NYSE:HAL TSX:PD DSGX)")
     cp.add_argument("--currency", default="CAD",
                     help="Output currency code (default: CAD)")
@@ -293,6 +293,17 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="Output raw JSON dict instead of markdown table")
     cp.add_argument("--csv", default=None, metavar="PATH",
                     help="Also write CSV to this path")
+    cp.add_argument("--xlsx", default=None, metavar="PATH",
+                    help="Also write a formatted XLSX comp table (firm-template style) to this path")
+    cp.add_argument("--xlsx-sheets", choices=["both", "lease-adjusted", "excluding-leases"],
+                    default="both",
+                    help="Which tabs to include in the --xlsx workbook (default: both, "
+                         "mirroring the firm template)")
+    cp.add_argument("--columns", nargs="*", default=None,
+                    help="Ordered column keys for the XLSX (run --list-columns to see all). "
+                         "Default: the firm template's standard columns.")
+    cp.add_argument("--list-columns", action="store_true",
+                    help="Print available XLSX column keys for the chosen --mode and exit")
     cp.add_argument("--extra", nargs="*", default=None,
                     help='Optional extra metrics: "roe" "rev-growth" "div-yield" (run --list-extras to see all)')
     cp.add_argument("--list-extras", action="store_true",
@@ -556,6 +567,26 @@ def _cmd_comps(args) -> int:
         print(f"\nUsage: capiq comps TICKER1 TICKER2 --extra roe rev-growth div-yield")
         return 0
 
+    # Handle --list-columns
+    if args.list_columns:
+        from capiq_excel.engines.comps_xlsx import list_columns
+        print(f"Available XLSX columns for --mode {args.mode} "
+              f"(* = shown by default):\n")
+        print(f"{'Key':<16} {'Header':<22} {'Default'}")
+        print(f"{'-'*16} {'-'*22} {'-'*7}")
+        for key, header, is_default in list_columns(args.mode):
+            print(f"{key:<16} {header:<22} {'*' if is_default else ''}")
+        print('\nExtra metrics (via --extra) are also usable as column keys.')
+        print('Usage: capiq comps TICKER1 TICKER2 --xlsx out.xlsx '
+              '--columns company mkt_cap tev ev_ltm_ebitda')
+        return 0
+
+    if not args.tickers:
+        print(json.dumps({"error": "usage",
+                          "message": "No tickers provided. Pass one or more tickers, "
+                                     "or use --list-columns / --list-extras."}))
+        return 1
+
     lease_adjust_ntm = not args.no_lease_adjust_ntm
     groups = parse_groups(args.groups)
 
@@ -595,6 +626,52 @@ def _cmd_comps(args) -> int:
         df = pd.DataFrame(data["companies"])
         df.to_csv(args.csv, index=False)
         print(f"CSV saved to: {args.csv}", file=sys.stderr)
+
+    if args.xlsx:
+        from capiq_excel.engines.comps_xlsx import write_comps_xlsx
+
+        if args.xlsx_sheets == "both":
+            wanted_modes = ["lease-adjusted", "excluding-leases"]
+        else:
+            wanted_modes = [args.xlsx_sheets]
+
+        try:
+            datasets = []
+            for m in wanted_modes:
+                if m == args.mode:
+                    datasets.append(data)  # reuse the primary pull
+                else:
+                    print(f"Pulling {m} data for the '{m}' tab...", file=sys.stderr)
+                    datasets.append(run_comps(
+                        tickers=args.tickers,
+                        currency=args.currency,
+                        mode=m,
+                        lease_adjust_ntm=lease_adjust_ntm,
+                        date=data.get("date"),   # share the primary pull's as-of date
+                        max_wait=args.max_wait,
+                        extras=args.extra,
+                    ))
+            write_comps_xlsx(
+                datasets, args.xlsx,
+                columns=args.columns,
+                groups=groups,
+                extra_specs=extra_specs,
+                active_mode=args.mode,
+            )
+            print(f"XLSX saved to: {args.xlsx} "
+                  f"({len(datasets)} tab{'' if len(datasets) == 1 else 's'})",
+                  file=sys.stderr)
+        except ValueError as e:
+            print(json.dumps({"error": "validation", "message": str(e)}))
+            return 1
+        except PermissionError:
+            print(json.dumps({"error": "file_locked",
+                              "message": f"Could not write {args.xlsx} — it may be open in "
+                                         "Excel. Close it and re-run."}))
+            return 1
+        except Exception as e:
+            print(json.dumps({"error": "execution", "message": str(e)}))
+            return 1
 
     return 0
 

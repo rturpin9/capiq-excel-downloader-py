@@ -55,6 +55,8 @@ capiq_excel/                     # Core library — Excel COM automation for CIQ
     __init__.py        # High-level engines package
     comps.py           # Comp table engine: builds XLSX, drives Excel, extracts results
                        #   Supports lease-adjusted / excluding-leases modes, NTM lease adj
+    comps_xlsx.py      # Formatted XLSX deliverable writer (firm "Comp Set" template style):
+                       #   column registry, group sections, Avg/Median + live derived formulas
     chart.py           # Chart engine: builds time-series workbooks, extracts data, renders
                        #   matplotlib charts. Supports market/multiple/financial metric types,
                        #   line/bar/line_marker/dual_axis chart types, indexed mode
@@ -178,6 +180,10 @@ capiq doctor          # Check environment health
 capiq comps DSGX ROP MANH --currency USD                      # Markdown comp table
 capiq comps DSGX ROP --json                                    # JSON comp table
 capiq comps NYSE:HAL TSX:PD --mode excluding-leases            # Ex-leases mode
+capiq comps DSGX ROP MANH --xlsx comps.xlsx                    # Formatted XLSX (both Lease Adjusted + Excluding Leases tabs)
+capiq comps DSGX ROP --xlsx c.xlsx --xlsx-sheets lease-adjusted  # Single-tab XLSX (faster, one pull)
+capiq comps DSGX ROP --xlsx c.xlsx --columns company mkt_cap tev ev_ltm_ebitda  # Pick/reorder columns
+capiq comps --list-columns                                     # List XLSX column keys
 capiq chart DSGX MANH --metrics IQ_CLOSEPRICE --metric-type market  # Stock price chart
 capiq chart DSGX --metrics IQ_TEV_EBITDA --metric-type multiple     # EV/EBITDA chart
 capiq lookup DSGX "Roper Technologies"                         # ID resolution
@@ -217,6 +223,8 @@ python pull_comps.py DSGX ROP MANH --currency USD --mode excluding-leases
 - `MetricType` enum replaces stringly-typed `metric_type` field — use `MetricType.FINANCIAL`, `.MARKET`, `.OWNERSHIP`, `.ESTIMATES`, `.ID_LOOKUP`
 - `extract.py` uses batch COM reads (`Range().Value`) instead of cell-by-cell — orders of magnitude faster for large datasets
 - `capiq_excel/engines/` exposes `comps`, `chart`, and `id_lookup` engines, used by the `capiq` CLI and Claude Code skills
+- `capiq comps --xlsx PATH` writes a formatted deliverable (`engines/comps_xlsx.py`) styled like the firm "Comp Set" template: navy headers / teal group headers / gold Avg-Median rows, accounting/pct/multiple formats, and live derived + Average/Median formulas (raw pulled metrics are values). `--columns` selects/reorders columns (`--list-columns` to enumerate; `--extra` keys are also valid columns); derived columns whose inputs are dropped fall back to static values. Color palette + number formats are resolved from `Comp Set - New.xlsx`.
+- The `--xlsx` workbook contains **both `Lease Adjusted` and `Excluding Leases` tabs by default** (mirrors the template) — the CLI runs a separate `run_comps` per mode; `--xlsx-sheets {both|lease-adjusted|excluding-leases}` controls this (`--mode` picks the active tab). `write_comps_xlsx(datasets, ...)` accepts a dict (one tab) or list of dicts (multi-tab); `build_columns` silently skips keys not applicable to a tab's mode (e.g. `lease_adj` on the excl tab).
 - `capiq chart` supports three metric types: `market` (CIQRANGE date range), `multiple` (CIQRANGEV period+range), `financial` (CIQRANGE period offset) — and four chart types: `line`, `bar`, `line_marker`, `dual_axis`
 - Skills in `.claude/skills/comps/SKILL.md` and `.claude/skills/chart/SKILL.md`
 - `excel_lifecycle.py` is shared infrastructure used by `capiq_excel.engines` and `capiq_excel.workbook` — logger is `capiq_excel`
