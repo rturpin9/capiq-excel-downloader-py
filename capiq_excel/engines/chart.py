@@ -995,6 +995,29 @@ def run_chart(
             if note.get("iq_id"):
                 data_summary[ticker]["_resolved_iq_id"] = note["iq_id"]
 
+    # Also dump raw data as CSV if available
+    raw_csv_path = chart_path.replace(".png", "_raw.csv") if chart_path else None
+    if raw_csv_path and data:
+        try:
+            import csv, datetime as _dt
+            with open(raw_csv_path, "w", newline="") as f:
+                writer = csv.writer(f)
+                for ticker, tdata in data.items():
+                    dates = tdata.get("dates", [])
+                    metric_keys = [k for k in tdata if k not in ("dates", "_num_points")]
+                    header = ["Ticker", "Date"] + metric_keys
+                    writer.writerow(header)
+                    n = max(len(dates), max((len(tdata[m]) for m in metric_keys), default=0))
+                    for i in range(n):
+                        d = dates[i] if i < len(dates) else ""
+                        if isinstance(d, _dt.datetime):
+                            d = d.strftime("%Y-%m-%d")
+                        row = [ticker, d] + [tdata[m][i] if i < len(tdata[m]) else "" for m in metric_keys]
+                        writer.writerow(row)
+            log.info("Raw data CSV saved: %s", raw_csv_path)
+        except Exception as e:
+            log.warning("Failed to write raw CSV: %s", e)
+
     return {
         "chart_path": chart_path.replace("\\", "/"),
         "data": data_summary,
