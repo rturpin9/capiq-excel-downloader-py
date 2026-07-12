@@ -6,9 +6,8 @@ Validates that config -> dialect resolution -> builder -> command factories
 all wire together correctly.
 """
 import pytest
-from capiq_excel.config import CapiqConfig, FormulaDialect, AddinMode, FormulaOptions
+from capiq_excel.config import CapiqConfig, FormulaDialect
 from capiq_excel.formulas import get_builder
-from capiq_excel.formulas.base import QuerySpec
 from capiq_excel.formulas.ciq_builder import CiqBuilder
 from capiq_excel.formulas.spg_builder import SpgBuilder
 from capiq_excel.workbook.commands import (
@@ -18,7 +17,6 @@ from capiq_excel.workbook.commands import (
     make_id_command,
     make_name_command,
     financial_data_command,
-    market_data_command,
     id_command,
     name_command,
 )
@@ -134,7 +132,7 @@ class TestMakeNameCommand:
 class TestLegacyCommandsUnchanged:
     def test_financial_data_command(self):
         result = financial_data_command("IQ21835", "IQ_TOTAL_REV", freq="Q", num_periods=80, data_item_label="Sales")
-        assert result == '=CIQRANGE("IQ21835", "IQ_TOTAL_REV", IQ_FQ - 80, , , , , , "Sales")'
+        assert result == '=CIQRANGE("IQ21835", "IQ_TOTAL_REV", IQ_FQ - 80, , , , , , , "Sales")'
 
     def test_id_command(self):
         result = id_command("MSFT")

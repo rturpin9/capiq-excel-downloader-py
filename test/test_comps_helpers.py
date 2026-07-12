@@ -60,6 +60,7 @@ class TestErrorTokens:
     def test_numeric_values_not_errors(self):
         assert is_error_value(123.4) is False
         assert is_error_value(0) is False
+        assert is_error_value(-2146826259) is True
         assert safe_float("1,234.5") == 1234.5
 
 

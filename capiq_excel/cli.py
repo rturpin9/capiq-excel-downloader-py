@@ -421,11 +421,21 @@ def _cmd_detect_addins() -> int:
         return 1
 
     try:
+        excel = None
         excel = _start_excel_with_addins_and_attach()
         profile = detect_runtime(excel)
     except Exception as e:
         print(f"Error: Could not start Excel or detect add-ins: {e}")
         return 1
+    finally:
+        if excel is not None:
+            try:
+                excel.Quit()
+            except Exception:
+                logging.getLogger(__name__).debug(
+                    "Could not close diagnostic Excel session",
+                    exc_info=True,
+                )
 
     print()
     print("Runtime Profile")
@@ -564,7 +574,7 @@ def _cmd_comps(args) -> int:
         for key in sorted(EXTRA_METRICS_CATALOG):
             s = EXTRA_METRICS_CATALOG[key]
             print(f"{s.key:<16} {s.label:<20} {s.fmt:<8} {'yes' if s.is_summary else 'no':<8} {s.mnemonic}")
-        print(f"\nUsage: capiq comps TICKER1 TICKER2 --extra roe rev-growth div-yield")
+        print("\nUsage: capiq comps TICKER1 TICKER2 --extra roe rev-growth div-yield")
         return 0
 
     # Handle --list-columns

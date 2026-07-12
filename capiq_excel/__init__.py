@@ -18,3 +18,17 @@ from capiq_excel.config import (
 )
 from capiq_excel.formulas import get_builder
 from capiq_excel.formulas.base import QuerySpec, DialectBuilder
+
+__all__ = [
+    "download_data",
+    "download_data_for_capiq_ids",
+    "CapiqConfig",
+    "FormulaDialect",
+    "AddinMode",
+    "RefreshScope",
+    "MetricType",
+    "FormulaOptions",
+    "get_builder",
+    "QuerySpec",
+    "DialectBuilder",
+]

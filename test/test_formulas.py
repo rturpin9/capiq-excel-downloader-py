@@ -37,7 +37,7 @@ class TestCiqBuilderFinancial:
             label="Sales",
         )
         result = ciq.build_range(spec)
-        assert result == '=CIQRANGE("IQ21835", "IQ_TOTAL_REV", IQ_FQ - 80, , , , , , "Sales")'
+        assert result == '=CIQRANGE("IQ21835", "IQ_TOTAL_REV", IQ_FQ - 80, , , , , , , "Sales")'
 
     def test_financial_range_yearly(self, ciq):
         spec = QuerySpec(
@@ -48,7 +48,7 @@ class TestCiqBuilderFinancial:
             num_periods=20,
         )
         result = ciq.build_range(spec)
-        assert result == '=CIQRANGE("IQ21835", "IQ_TOTAL_REV", IQ_FY - 20, , , , , , "IQ_TOTAL_REV")'
+        assert result == '=CIQRANGE("IQ21835", "IQ_TOTAL_REV", IQ_FY - 20, , , , , , , "IQ_TOTAL_REV")'
 
     def test_financial_range_default_label(self, ciq):
         spec = QuerySpec(
@@ -71,7 +71,7 @@ class TestCiqBuilderMarket:
             label="Float %",
         )
         result = ciq.build_range(spec)
-        assert result == '=CIQRANGE("IQ21835", "IQ_FLOAT_PERCENT", "01/01/2020", "12/31/2024", , , , , "Float %")'
+        assert result == '=CIQRANGE("IQ21835", "IQ_FLOAT_PERCENT", "01/01/2020", "12/31/2024", , , , , , "Float %")'
 
 
 class TestCiqBuilderIdLookup:

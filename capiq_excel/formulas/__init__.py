@@ -11,6 +11,8 @@ from capiq_excel.formulas.ciq_builder import CiqBuilder
 from capiq_excel.formulas.spg_builder import SpgBuilder
 from capiq_excel.formulas.snl_builder import SnlBuilder
 
+__all__ = ["get_builder", "DialectBuilder", "QuerySpec"]
+
 _BUILDERS = {
     FormulaDialect.CIQ: CiqBuilder,
     FormulaDialect.SPG: SpgBuilder,

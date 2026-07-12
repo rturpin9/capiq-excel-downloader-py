@@ -7,6 +7,7 @@ from capiq_excel.ids import download_capiq_ids, _get_ids_from_csv_path
 from capiq_excel.combine import combine_all_capiq_xlsx
 from capiq_excel.config import CapiqConfig, FormulaDialect
 from capiq_excel.formulas import get_builder
+from capiq_excel.fileops import clear_generated_xlsx_files
 
 
 def _resolve_config_dialect(config: CapiqConfig) -> CapiqConfig:
@@ -19,6 +20,7 @@ def _resolve_config_dialect(config: CapiqConfig) -> CapiqConfig:
         return config
 
     ciq_compat = True  # safe default
+    excel = None
     try:
         import time
         from capiq_excel.runtime.addin_detection import detect_runtime
@@ -31,9 +33,14 @@ def _resolve_config_dialect(config: CapiqConfig) -> CapiqConfig:
         print(f'  Pro installed: {profile.pro_installed}, CIQ compat: {ciq_compat}')
         print(f'  Available dialects: {profile.available_dialects or "(none)"}')
         print(f'  Add-in mode: {profile.addin_mode}')
-        excel.Quit()
     except Exception as e:
         print(f'  WARNING: Runtime detection failed ({e}), defaulting to CIQ')
+    finally:
+        if excel is not None:
+            try:
+                excel.Quit()
+            except Exception:
+                pass
 
     resolved = copy.copy(config)
     resolved.formula_dialect = config.resolve_dialect(ciq_compat_available=ciq_compat)
@@ -71,6 +78,9 @@ def download_data(company_ids: List[str], financial_data_items: Optional[Union[D
     :param financial_command_kwargs: kwargs for :py:func:`.financial_data_command`
     :return:
     """
+    if not company_ids:
+        raise ValueError("company_ids must not be empty")
+
     # Early detection: resolve AUTO dialect once for the entire pipeline
     if config is not None:
         config = _resolve_config_dialect(config)
@@ -128,6 +138,8 @@ def download_data_for_capiq_ids(capiq_company_ids: List[str],
     :param financial_command_kwargs: kwargs for :py:func:`.financial_data_command`
     :return:
     """
+    if not capiq_company_ids:
+        raise ValueError("capiq_company_ids must not be empty")
     financial_data_items, market_data_items = _get_data_items_dicts(financial_data_items, market_data_items)
 
     # Resolve the formula dialect and create the builder.
@@ -141,15 +153,25 @@ def download_data_for_capiq_ids(capiq_company_ids: List[str],
         print(f'Using formula dialect: {dialect.value}')
         builder = get_builder(dialect)
 
+    command_kwargs = dict(financial_command_kwargs)
+    formula_options = None
+    if config is not None:
+        command_kwargs.setdefault("freq", config.freq)
+        command_kwargs.setdefault("num_periods", config.num_periods)
+        formula_options = config.formula_options
+
     if restart or not os.path.exists(folder):
         print('Creating XLSX files with commands')
+        if restart:
+            clear_generated_xlsx_files(folder)
         create_all_xlsx_with_commands(
             folder,
             company_id_list=capiq_company_ids,
             financial_data_items_dict=financial_data_items,
             market_data_items_dict=market_data_items,
             builder=builder,
-            **financial_command_kwargs
+            formula_options=formula_options,
+            **command_kwargs
         )
 
     print('Populating XLSX files with Capital IQ data')
@@ -170,14 +192,6 @@ def download_data_for_capiq_ids(capiq_company_ids: List[str],
         restart=restart
     )
 
-
-    # TODO: remove after fixing bug where download_data_for_capiq_ids combine isn't working on first go
-    if not os.path.exists(outpath):
-        combine_all_capiq_xlsx(
-            folder,
-            outpath
-        )
-
 def _get_data_items_dicts(financial_data_items: Union[Dict[str, str], Sequence[str]] = None,
                           market_data_items: Union[Dict[str, str], Sequence[str]] = None
                           ) -> List[Dict[str, str]]:
@@ -187,6 +201,8 @@ def _get_data_items_dicts(financial_data_items: Union[Dict[str, str], Sequence[s
     for data_items in (financial_data_items, market_data_items):
         if data_items is None:
             out_dicts.append({})
+        elif isinstance(data_items, str):
+            out_dicts.append({data_items: data_items})
         elif not isinstance(data_items, dict):
             # Convert list to dict
             out_dicts.append({var_name: var_name for var_name in data_items})

@@ -6,6 +6,7 @@ from capiq_excel.excel_lifecycle import start_excel_with_addins_and_attach as _s
 from processfiles.files import FileProcessTracker
 from capiq_excel.workbook.populate.main import populate_capiq_ids_for_file
 from capiq_excel.workbook.create import create_all_xlsx_with_id_commands
+from capiq_excel.fileops import clear_generated_xlsx_files
 
 
 def download_capiq_ids(ids: Sequence[str], outpath: str = 'capiq ids.csv', folder: str = 'in_process_ids',
@@ -22,6 +23,9 @@ def download_capiq_ids(ids: Sequence[str], outpath: str = 'capiq ids.csv', folde
     :param config: Optional CapiqConfig for dialect and add-in mode.
     :return: capiq ids
     """
+    if not ids:
+        raise ValueError("ids must not be empty")
+
     # Resolve builder for formula generation
     builder = None
     if config is not None:
@@ -34,6 +38,7 @@ def download_capiq_ids(ids: Sequence[str], outpath: str = 'capiq ids.csv', folde
         builder = get_builder(dialect)
 
     print('Creating XLSX files with commands to get ids')
+    clear_generated_xlsx_files(folder)
     num_files = math.ceil(len(ids) / 100)
     create_all_xlsx_with_id_commands(ids, folder, num_files=num_files, builder=builder)
 
@@ -50,18 +55,34 @@ def populate_all_ids_in_folder(folder, restart=True, config=None):
     excel = _start_excel_with_addins_and_attach()
 
     try:
+        effective_addin_mode = None
         # When config is available, detect runtime and load the right add-in
         if config is not None:
             from capiq_excel.addin import load_capiq_addin
+            from capiq_excel.config import AddinMode
             try:
-                load_capiq_addin(excel, config)
+                profile, _ = load_capiq_addin(excel, config)
+                if config.addin_mode == AddinMode.AUTO:
+                    effective_addin_mode = (
+                        AddinMode.LEGACY
+                        if profile.addin_mode == "legacy"
+                        else AddinMode.PRO
+                    )
+                else:
+                    effective_addin_mode = config.addin_mode
             except Exception as e:
                 print(f'Warning: Could not detect/load add-in ({e}), falling back to default behavior')
 
         file_tracker = FileProcessTracker(folder=folder, restart=restart, file_types=('xlsx',))
 
         for file in file_tracker.file_generator():
-            populate_capiq_ids_for_file(file, excel, config=config)
+            populate_capiq_ids_for_file(
+                file,
+                excel,
+                config=config,
+                addin_mode=effective_addin_mode,
+                refresh_timeout=(config.retry.timeout_seconds if config else 240),
+            )
     finally:
         try:
             excel.Quit()
@@ -94,4 +115,18 @@ def _remove_useless_cols(df):
 
 def _get_ids_from_csv_path(csv_path: str) -> List[str]:
     df = pd.read_csv(csv_path)
-    return df['IQID'].tolist()
+    if 'IQID' not in df.columns:
+        raise ValueError(f"ID output is missing the IQID column: {csv_path}")
+
+    ids = []
+    for value in df['IQID']:
+        if pd.isna(value):
+            continue
+        normalized = str(value).strip()
+        if not normalized or normalized.upper().startswith(("#", "INVALID")):
+            continue
+        ids.append(normalized)
+
+    if not ids:
+        raise ValueError(f"No identifiers resolved successfully in {csv_path}")
+    return ids

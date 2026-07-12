@@ -9,7 +9,8 @@ from __future__ import annotations
 import os
 import subprocess
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from functools import wraps
 from typing import Optional
 
 import logging
@@ -25,6 +26,18 @@ from exceldriver.tools import (
 )
 
 log = logging.getLogger("capiq_excel")
+
+
+def com_initialized(func):
+    """Run a callable inside a balanced COM apartment initialization."""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        pythoncom.CoInitialize()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            pythoncom.CoUninitialize()
+    return wrapper
 
 
 # ── Visibility control ─────────────────────────────────────────────────────

@@ -47,6 +47,14 @@ class QuerySpec:
 class DialectBuilder(ABC):
     """Abstract base for dialect-specific formula generators."""
 
+    def identifier_lookup_spills_right(self) -> bool:
+        """Whether identifier lookup results land one cell to the right.
+
+        CIQRANGEA uses a horizontal spill layout.  SPG and SNL lookup
+        functions return their value in the formula cell itself.
+        """
+        return False
+
     @staticmethod
     def _validate_spec(spec: QuerySpec) -> None:
         """Validate that a QuerySpec has required fields."""

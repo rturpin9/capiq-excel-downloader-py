@@ -16,7 +16,7 @@ dropped, the column falls back to a static value.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Optional
 
@@ -89,7 +89,7 @@ def _f_ev(num_key):
 
 def _f_nd_ebitda(c):
     n, d = c["Net Debt"], c["LTM EBITDA"]
-    return f'=IFERROR(IF({n}/{d}>0,{n}/{d},"NM"),"NM")'
+    return f'=IFERROR({n}/{d},"NM")'
 
 DERIVED: dict[str, tuple[list[str], Callable[[dict], str], str]] = {
     "ebitda_margin": (["LTM EBITDA", "LTM Rev"], _f_margin, "EBITDA Margin %"),
@@ -146,9 +146,6 @@ _DEFAULTS_EXCL = [
     "ltm_rev", "ntm_rev", "ltm_ebitda", "ntm_ebitda", "ebitda_margin",
     "ev_rev", "ev_ltm_ebitda", "ev_ntm_ebitda", "pbv", "nd_ebitda",
 ]
-
-# Block order for laying out vertical separators.
-_BLOCK_ORDER = ["cap", "ops", "evm", "othm", "extra"]
 
 AVAILABLE_KEYS = sorted(set(_registry("lease-adjusted")) | set(_registry("excluding-leases")))
 
@@ -307,7 +304,6 @@ def _write_sheet(ws, data: dict, *, columns=None, groups=None, extra_specs=None)
     ref_map = {c.data_key: col_letter[c.key] for c in cols if c.data_key}
 
     # First column of each present block gets a left separator.
-    present_blocks = [b for b in _BLOCK_ORDER if any(c.block == b for c in cols)]
     block_first_idx = {}
     for i, c in enumerate(cols):
         if c.block not in block_first_idx:
@@ -511,6 +507,8 @@ def _cell_content(col: XlsxColumn, company: dict, ref_map: dict, row: int):
         v = company.get(fallback_key)
         if not _num(v):
             return None, False
+        if col.key == "nd_ebitda":
+            return float(v), False
         return (float(v) if float(v) > 0 else "NM"), False
 
     # plain value column

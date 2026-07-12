@@ -1,4 +1,4 @@
-import conf
-major, minor, release = conf.PACKAGE_VERSION_TUPLE
-__version__ = f"{major}.{minor}.{release}"
-__version_info__ = conf.PACKAGE_VERSION_TUPLE
+"""Compatibility version module for the legacy Sphinx configuration."""
+
+__version__ = "0.5.0-beta.1"
+__version_info__ = (0, 5, 0, "beta", 1)

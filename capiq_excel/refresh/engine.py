@@ -60,6 +60,15 @@ LEGACY_ERROR_TOKENS = frozenset({
 
 ALL_ERROR_TOKENS = HARD_ERROR_TOKENS | LEGACY_ERROR_TOKENS
 
+_VERTICAL_RANGE_FORMULAS = (
+    "=ciqrange(",
+    "=ciqrangev(",
+    "=spgrangev(",
+    "=snlmarkets(",
+)
+_HORIZONTAL_RANGE_FORMULAS = ("=ciqrangea(",)
+_COM_NAME_ERROR = -2146826259
+
 # Pro VBA macro names for Application.Run (via SNLxlAddin.xla)
 _VBA_REFRESH_SELECTED = "SNLxlAddin.xla!RefreshActiveCells"
 _VBA_REFRESH_SHEET = "SNLxlAddin.xla!RefreshSheet"
@@ -77,6 +86,7 @@ def refresh_and_wait(
     addin_mode: AddinMode = AddinMode.AUTO,
     poll_interval: float = 1.0,
     init_delay: float = DEFAULT_ADDIN_INIT_DELAY,
+    allow_cell_errors: bool = False,
 ) -> bool:
     """
     Trigger a refresh and wait for completion.
@@ -118,7 +128,10 @@ def refresh_and_wait(
                 f"(scope={scope.value}, mode={addin_mode.value})"
             )
 
-        status, detail = _check_readiness(excel)
+        status, detail = _check_readiness(
+            excel,
+            allow_cell_errors=allow_cell_errors,
+        )
         if status == "ready":
             logger.debug("Refresh completed in %.1fs", elapsed)
             return True
@@ -177,13 +190,18 @@ def _classify_cell_token(val_lower: str) -> Optional[tuple[str, str]]:
     return None
 
 
-def _check_readiness(excel) -> tuple[str, Optional[str]]:
+def _check_readiness(
+    excel,
+    *,
+    allow_cell_errors: bool = False,
+) -> tuple[str, Optional[str]]:
     """
     Check whether the active sheet has finished evaluating.
 
-    Scans the first two rows across the first several columns for known
-    status/error tokens from CIQ and SPG/SNL. This covers both data worksheets
-    (formulas in column A) and ID lookup worksheets (formulas in columns B/D).
+    Batch-scans every formula in the active sheet's used range.  This is
+    important for ID workbooks, where each input row has independent formulas;
+    checking only the first result can close the workbook while later rows are
+    still pending.
 
     Also checks if formula cells have resolved — a formula cell whose value is
     still None (or a COM #NAME? error code) likely hasn't been evaluated yet.
@@ -199,61 +217,117 @@ def _check_readiness(excel) -> tuple[str, Optional[str]]:
     except AttributeError:
         return "error", "workbook_closed"
 
-    found_any_data = False
+    try:
+        used = ws.UsedRange
+        first_row = int(used.Row)
+        first_col = int(used.Column)
+        row_count = int(used.Rows.Count)
+        col_count = int(used.Columns.Count)
+        values = _as_matrix(used.Value, row_count, col_count)
+        formulas = _as_matrix(used.Formula, row_count, col_count)
+    except Exception:
+        logger.warning("Could not batch-read active sheet for refresh status", exc_info=True)
+        return "pending", "sheet_unreadable"
+
+    found_formula = False
     has_unresolved_formula = False
 
-    # Scan the first 2 rows x first 8 columns
-    for row in (1, 2):
-        for col in range(1, 9):
-            val = _get_cell_str(excel, col=col, row=row)
+    def value_at(row: int, col: int):
+        local_row = row - first_row
+        local_col = col - first_col
+        if 0 <= local_row < row_count and 0 <= local_col < col_count:
+            return values[local_row][local_col]
+        try:
+            return ws.Cells(row, col).Value
+        except Exception:
+            return None
 
-            # Check if this cell has a formula that hasn't resolved
-            try:
-                cell = ws.Cells(row, col)
-                if cell.HasFormula:
-                    cell_val = cell.Value
-                    # COM error codes (e.g. -2146826259 = #NAME?) mean
-                    # the UDF hasn't registered yet — still pending
-                    if isinstance(cell_val, int) and cell_val < -2000000000:
-                        has_unresolved_formula = True
-                    # A formula cell with no value yet is likely still evaluating.
-                    # NOTE: do NOT treat 0 / 0.0 / "" as unresolved — those are
-                    # legitimate results (e.g. zero debt) and previously caused
-                    # refresh_and_wait to hang until timeout on valid data.
-                    elif cell_val is None:
-                        has_unresolved_formula = True
-            except Exception:
-                logger.debug("Could not read formula status from cell(%d, %d)", row, col, exc_info=True)
-
-            if val is None:
+    for row_offset in range(row_count):
+        for col_offset in range(col_count):
+            formula = formulas[row_offset][col_offset]
+            if not isinstance(formula, str) or not formula.startswith("="):
                 continue
 
-            val_lower = val.lower().strip()
-            if not val_lower:
-                continue
+            found_formula = True
+            row = first_row + row_offset
+            col = first_col + col_offset
+            value = values[row_offset][col_offset]
 
-            found_any_data = True
+            status = _classify_formula_value(value)
+            if status is not None:
+                if status[0] == "error":
+                    if not allow_cell_errors:
+                        return status
+                else:
+                    has_unresolved_formula = True
 
-            # Classify by status token (pending checked before error).
-            classification = _classify_cell_token(val_lower)
-            if classification is not None:
-                return classification
+            formula_lower = formula.lower().replace(" ", "")
+            spill_value = None
+            if formula_lower.startswith(_HORIZONTAL_RANGE_FORMULAS):
+                spill_value = value_at(row, col + 1)
+            elif formula_lower.startswith(_VERTICAL_RANGE_FORMULAS):
+                spill_value = value_at(row + 1, col)
 
-    # If we found no data at all, still pending
-    if not found_any_data:
-        return "pending", "no_data"
+            if spill_value is not None or formula_lower.startswith(
+                _HORIZONTAL_RANGE_FORMULAS + _VERTICAL_RANGE_FORMULAS
+            ):
+                spill_status = _classify_formula_value(spill_value)
+                if spill_status is not None:
+                    if spill_status[0] == "error":
+                        if not allow_cell_errors:
+                            return spill_status
+                    else:
+                        has_unresolved_formula = True
 
-    # If any formula cell in row 2 hasn't resolved, still pending
+    if not found_formula:
+        return "pending", "no_formulas"
+
+    try:
+        # xlDone == 0.  Native Excel calculation can finish after cell values
+        # first become non-empty, so include it in the completion gate.
+        if excel.CalculationState not in (0, None):
+            return "pending", "excel_calculating"
+    except Exception:
+        logger.debug("Could not read Excel.CalculationState", exc_info=True)
+
     if has_unresolved_formula:
         return "pending", "unresolved_formula"
 
     return "ready", None
 
 
-def _get_cell_str(excel, col: int, row: int) -> Optional[str]:
-    """Safely read a cell value as a string."""
-    try:
-        val = excel.ActiveSheet.Cells(row, col).Value
-        return str(val) if val is not None else None
-    except Exception:
-        return None
+def _classify_formula_value(value) -> Optional[tuple[str, str]]:
+    """Classify a formula or spill value without rejecting valid zero/blank strings."""
+    if value is None:
+        return "pending", "no_value"
+    if isinstance(value, int) and value < -2000000000:
+        if value == _COM_NAME_ERROR:
+            return "pending", "#name"
+        return "error", f"excel_error_{value}"
+    if isinstance(value, str):
+        normalized = value.lower().strip()
+        if not normalized:
+            return None
+        return _classify_cell_token(normalized)
+    return None
+
+
+def _as_matrix(raw, rows: int, cols: int) -> list[list]:
+    """Normalize Excel's scalar/tuple Range values to a rectangular matrix."""
+    if rows == 1 and cols == 1:
+        return [[raw]]
+    if not isinstance(raw, (tuple, list)):
+        return [[raw for _ in range(cols)] for _ in range(rows)]
+
+    if rows == 1 and len(raw) == cols and not isinstance(raw[0], (tuple, list)):
+        return [list(raw)]
+    if cols == 1 and len(raw) == rows and not isinstance(raw[0], (tuple, list)):
+        return [[item] for item in raw]
+
+    matrix = []
+    for row in raw:
+        if isinstance(row, (tuple, list)):
+            matrix.append(list(row))
+        else:
+            matrix.append([row])
+    return matrix

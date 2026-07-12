@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash C:/Claude/.claude/sync_global.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

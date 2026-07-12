@@ -12,6 +12,7 @@ from .commands import (
     make_financial_command, make_market_command, make_holdings_command, make_id_command, make_name_command,
 )
 
+from capiq_excel.config import FormulaOptions
 from capiq_excel.formulas.base import DialectBuilder
 
 
@@ -19,6 +20,7 @@ def create_all_xlsx_with_commands(folder: str, company_id_list: Sequence[str],
                                   financial_data_items_dict: Dict[str, str],
                                   market_data_items_dict: Dict[str, str],
                                   builder: Optional[DialectBuilder] = None,
+                                  formula_options: Optional[FormulaOptions] = None,
                                   **financials_kwargs):
     for company_id in company_id_list:
         create_xlsx_with_commands(
@@ -27,6 +29,7 @@ def create_all_xlsx_with_commands(folder: str, company_id_list: Sequence[str],
             financial_data_items_dict,
             market_data_items_dict,
             builder=builder,
+            formula_options=formula_options,
             **financials_kwargs
         )
 
@@ -34,10 +37,12 @@ def create_all_xlsx_with_commands(folder: str, company_id_list: Sequence[str],
 def create_xlsx_with_commands(folder: str, company_id: str, financial_data_items_dict: Dict[str, str],
                               market_data_items_dict: Dict[str, str],
                               builder: Optional[DialectBuilder] = None,
+                              formula_options: Optional[FormulaOptions] = None,
                               **financials_kwargs):
     wb, ws = get_workbook_and_worksheet()
     _fill_with_commands(ws, company_id, financial_data_items_dict, market_data_items_dict,
-                        builder=builder, **financials_kwargs)
+                        builder=builder, formula_options=formula_options,
+                        **financials_kwargs)
 
     os.makedirs(folder, exist_ok=True)
 
@@ -57,6 +62,7 @@ def create_xlsx_with_holdings_commands(folder, company_id, date_str, data_items_
     wb, ws = get_workbook_and_worksheet()
     _fill_with_holdings_commands(ws, company_id, date_str, data_items_dict, builder=builder)
 
+    os.makedirs(folder, exist_ok=True)
     filepath = os.path.join(folder, f'{company_id} {_date_str_to_file_format(date_str)}.xlsx')
     wb.save(filepath)
 
@@ -64,8 +70,10 @@ def create_xlsx_with_holdings_commands(folder, company_id, date_str, data_items_
 
 def create_all_xlsx_with_id_commands(ids: Sequence[str], folder, num_files=100,
                                      builder: Optional[DialectBuilder] = None):
-    wb, ws = get_workbook_and_worksheet()
-
+    if not ids:
+        raise ValueError("ids must not be empty")
+    if num_files <= 0:
+        raise ValueError("num_files must be greater than zero")
     os.makedirs(folder, exist_ok=True)
 
     df = pd.DataFrame()
@@ -73,29 +81,16 @@ def create_all_xlsx_with_id_commands(ids: Sequence[str], folder, num_files=100,
     _fill_capiq_id_column(df, builder=builder)
     _fill_capiq_name_column(df, builder=builder)
 
-    rows_per_ws = math.ceil(len(df)/num_files) + 1  # one additional row for headers
-
-    count_per_wb = 0
-    count_of_wb = 0
-    for index, r in enumerate(dataframe_to_rows(df, index=False, header=True)):
-        if index == 0:
-            headers = r
-        count_per_wb += 1
-        ws.append(r)
-        if count_per_wb >= rows_per_ws:
-            count_per_wb = 0
-            count_of_wb += 1
-            wb, ws = _save_wb_by_index_get_new_wb(count_of_wb, folder, wb)
-            ws.append(headers)
+    rows_per_ws = math.ceil(len(df) / num_files)
+    for file_index, start in enumerate(range(0, len(df), rows_per_ws), start=1):
+        wb, ws = get_workbook_and_worksheet()
+        chunk = df.iloc[start:start + rows_per_ws]
+        for row in dataframe_to_rows(chunk, index=False, header=True):
+            ws.append(row)
+        filepath = os.path.join(folder, f'ids {file_index}.xlsx')
+        wb.save(filepath)
 
 ##### Helper functions ####
-
-def _save_wb_by_index_get_new_wb(index, folder, wb):
-    filename = f'ids {index}.xlsx'
-    filepath = os.path.join(folder, filename)
-    wb.save(filepath)
-    wb, ws = get_workbook_and_worksheet()
-    return wb, ws
 
 def _fill_id_column(df: pd.DataFrame, ids: Sequence[str]):
     """
@@ -109,10 +104,13 @@ def _fill_capiq_id_column(df, builder: Optional[DialectBuilder] = None):
     """
     id_cmd = make_id_command(builder) if builder is not None else id_command
 
-    # CIQRANGEA expands one column to the right — formula goes in Blank,
-    # resolved value spills into IQID
-    df['Blank 1'] = df['ID'].apply(id_cmd)
-    df['IQID'] = ''
+    if builder is not None and not builder.identifier_lookup_spills_right():
+        df['IQID'] = df['ID'].apply(id_cmd)
+    else:
+        # CIQRANGEA expands one column to the right — formula goes in Blank,
+        # resolved value spills into IQID.
+        df['Blank 1'] = df['ID'].apply(id_cmd)
+        df['IQID'] = ''
 
 
 def _fill_capiq_name_column(df, builder: Optional[DialectBuilder] = None):
@@ -121,22 +119,26 @@ def _fill_capiq_name_column(df, builder: Optional[DialectBuilder] = None):
     """
     name_cmd = make_name_command(builder) if builder is not None else name_command
 
-    # CIQRANGEA expands one column to the right — formula goes in Blank,
-    # resolved value spills into IQ Name
-    df['Blank 2'] = df['ID'].apply(name_cmd)
-    df['IQ Name'] = ''
+    if builder is not None and not builder.identifier_lookup_spills_right():
+        df['IQ Name'] = df['ID'].apply(name_cmd)
+    else:
+        # CIQRANGEA expands one column to the right — formula goes in Blank,
+        # resolved value spills into IQ Name.
+        df['Blank 2'] = df['ID'].apply(name_cmd)
+        df['IQ Name'] = ''
 
 def _fill_with_commands(ws, company_id: str, financial_data_items_dict: Dict[str, str],
                         market_data_items_dict: Dict[str, str],
                         builder: Optional[DialectBuilder] = None,
+                        formula_options: Optional[FormulaOptions] = None,
                         **financials_kwargs):
     """
     Note: inplace
     """
     # Resolve command functions: builder-aware when available, legacy otherwise
     if builder is not None:
-        fin_cmd = make_financial_command(builder)
-        mkt_cmd = make_market_command(builder)
+        fin_cmd = make_financial_command(builder, formula_options)
+        mkt_cmd = make_market_command(builder, formula_options)
     else:
         fin_cmd = financial_data_command
         mkt_cmd = market_data_command

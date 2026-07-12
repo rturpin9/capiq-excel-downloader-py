@@ -138,10 +138,18 @@ class CapiqConfig:
             refresh_scope=_safe_enum(RefreshScope, "CAPIQ_REFRESH_SCOPE", RefreshScope.WORKSHEET),
             freq=os.environ.get("CAPIQ_FREQ", "Q"),
             num_periods=_safe_int("CAPIQ_NUM_PERIODS", 80),
+            formula_options=FormulaOptions(
+                currency=os.environ.get("CAPIQ_CURRENCY"),
+                magnitude=os.environ.get("CAPIQ_MAGNITUDE"),
+                conversion_method=os.environ.get("CAPIQ_CONVERSION_METHOD"),
+                null_display=os.environ.get("CAPIQ_NULL_DISPLAY"),
+                terminology=os.environ.get("CAPIQ_TERMINOLOGY"),
+            ),
             retry=RetryConfig(
                 max_retries=_safe_int("CAPIQ_MAX_RETRIES", 3),
                 timeout_seconds=_safe_int("CAPIQ_TIMEOUT", 240),
                 restart_interval=_safe_int("CAPIQ_RESTART_INTERVAL", 500),
+                retry_delay_seconds=_safe_int("CAPIQ_RETRY_DELAY", 30),
             ),
         )
 

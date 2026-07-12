@@ -184,6 +184,29 @@ class TestWriteXlsx:
         assert ws.cell(row, 15).number_format == r'0.0%;(0.0%)'  # pct
         assert ws.cell(row, 16).number_format == r'#,##0.0"x";(#,##0.0"x")'  # mult
 
+    def test_negative_net_debt_multiple_is_preserved(self, tmp_path):
+        p = tmp_path / "negative-nd.xlsx"
+        company = _company("Net Cash Co", "CASH", **{
+            "Net Debt": -100,
+            "ND/EBITDA": -0.5,
+        })
+        write_comps_xlsx(_data(companies=[company]), str(p))
+        ws = load_workbook(p).active
+        row = _label_rows(ws)["Net Cash Co *"]
+        formula = ws.cell(row, 20).value
+        assert formula.startswith("=IFERROR(")
+        assert ">0" not in formula
+
+        p2 = tmp_path / "negative-nd-static.xlsx"
+        write_comps_xlsx(
+            _data(companies=[company]),
+            str(p2),
+            columns=["company", "nd_ebitda"],
+        )
+        ws2 = load_workbook(p2).active
+        row2 = _label_rows(ws2)["Net Cash Co *"]
+        assert ws2.cell(row2, 4).value == -0.5
+
 
 class TestMultiTab:
     def test_two_tabs_named_and_ordered(self, tmp_path):

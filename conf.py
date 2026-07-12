@@ -5,7 +5,7 @@
 PACKAGE_NAME = 'capiq_excel'
 
 # Package version in the format (major, minor, release)
-PACKAGE_VERSION_TUPLE = (0, 4, 2)
+PACKAGE_VERSION_TUPLE = (0, 5, 0)
 
 # Short description of the package
 PACKAGE_SHORT_DESCRIPTION = 'Capital IQ Data Downloader using Python to drive Excel Plugin'
@@ -31,15 +31,17 @@ PACKAGE_CLASSIFIERS = [
     #   3 - Alpha
     #   4 - Beta
     #   5 - Production/Stable
-    'Development Status :: 3 - Alpha',
+    'Development Status :: 4 - Beta',
 
     # Indicate who your project is intended for
     'Intended Audience :: Developers',
 
     # Specify the Python versions you support here. In particular, ensure
     # that you indicate whether you support Python 2, Python 3 or both.
-    'Programming Language :: Python :: 3.6',
-    'Programming Language :: Python :: 3.7'
+    'Programming Language :: Python :: 3.10',
+    'Programming Language :: Python :: 3.11',
+    'Programming Language :: Python :: 3.12',
+    'Programming Language :: Python :: 3.13'
 ]
 
 # Add any third party packages you use in requirements here
@@ -52,8 +54,9 @@ PACKAGE_INSTALL_REQUIRES = [
     'processfiles',
     'pypiwin32',
     'openpyxl',
-    'pandas',
-    'xlrd'
+    'pandas>=1.5',
+    'xlrd',
+    'matplotlib'
 
 ]
 

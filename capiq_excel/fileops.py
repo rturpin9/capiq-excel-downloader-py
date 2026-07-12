@@ -1,6 +1,7 @@
 import os
 import shutil
 import time
+from pathlib import Path
 
 
 def get_path_of_failed_folder_add_if_necessary(orig_folder):
@@ -15,6 +16,20 @@ def _join_path_and_create_if_necessary(orig_folder, new_relative_path):
         os.makedirs(out_path)
 
     return out_path
+
+
+def clear_generated_xlsx_files(folder: str) -> None:
+    """Remove top-level generated workbooks from an in-process folder.
+
+    Restarted jobs rebuild their complete workbook set.  Limiting cleanup to
+    ``*.xlsx`` files directly inside the requested folder preserves nested
+    failure folders and unrelated file types.
+    """
+    path = Path(folder)
+    if not path.is_dir():
+        return
+    for workbook in path.glob("*.xlsx"):
+        workbook.unlink()
 
 
 def move_file_to_failed_folder(file, failed_folder, retries_remaining=100):

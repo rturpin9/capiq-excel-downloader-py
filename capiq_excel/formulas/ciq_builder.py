@@ -14,6 +14,9 @@ from capiq_excel.tools.dates import freq_and_periods_to_begin_date_str, today_as
 class CiqBuilder(DialectBuilder):
     """Emits legacy CIQ-family formulas."""
 
+    def identifier_lookup_spills_right(self) -> bool:
+        return True
+
     def dialect_name(self) -> str:
         return "ciq"
 
@@ -49,7 +52,7 @@ class CiqBuilder(DialectBuilder):
         freq_char = spec.frequency
         return (
             f'=CIQRANGE("{spec.identifiers[0]}", "{spec.metric}", '
-            f'IQ_F{freq_char} - {spec.num_periods}, , , , , , "{label}")'
+            f'IQ_F{freq_char} - {spec.num_periods}, , , , , , , "{label}")'
         )
 
     def _build_market_range(self, spec: QuerySpec, label: str) -> str:
@@ -57,7 +60,7 @@ class CiqBuilder(DialectBuilder):
         end = spec.end_date or today_as_str()
         return (
             f'=CIQRANGE("{spec.identifiers[0]}", "{spec.metric}", '
-            f'"{begin}", "{end}", , , , , "{label}")'
+            f'"{begin}", "{end}", , , , , , "{label}")'
         )
 
     def _build_holdings_range(self, spec: QuerySpec, label: str) -> str:

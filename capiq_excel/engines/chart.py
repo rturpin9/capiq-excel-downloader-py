@@ -2,7 +2,7 @@
 
 Supports three metric types:
   - market: CIQRANGE with date range (stock prices, TEV, market cap)
-  - multiple: CIQRANGEV with period type + date range (EV/EBITDA, P/E, etc.)
+  - multiple: CIQRANGE with period type + date range (EV/EBITDA, P/E, etc.)
   - financial: CIQRANGE with period offset (revenue, EBITDA, etc.)
 
 All COM/Excel work follows the same pattern as comps.py:
@@ -14,7 +14,10 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import tempfile
 import time
+import csv
 from datetime import datetime, timedelta
 
 import pythoncom
@@ -27,9 +30,9 @@ import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
 from openpyxl import Workbook
-from openpyxl.utils import get_column_letter
 
 from capiq_excel.engines.comps import safe_float, is_error_value
+from capiq_excel.excel_lifecycle import com_initialized
 
 log = logging.getLogger("capiq_excel")
 
@@ -68,31 +71,35 @@ VALID_CHART_TYPES = ("line", "bar", "line_marker", "dual_axis")
 
 
 def _build_market_formula(
-    id_ref: str, metric: str, start: str, end: str, label: str
+    id_ref: str, metric: str, start: str, end: str, label: str, currency: str
 ) -> str:
     """CIQRANGE formula for market data (date range)."""
+    curr_opt = f"Options: Curr={currency.upper()}"
     return (
         f'=CIQRANGE({id_ref},"{metric}","{start}","{end}"'
-        f',,,,,,"{label}")'
+        f',,,,,"{curr_opt}","{label}")'
     )
 
 
 def _build_multiple_formula(
-    id_ref: str, metric: str, period_type: str, start: str, end: str, label: str
+    id_ref: str, metric: str, period_type: str, start: str, end: str,
+    label: str, currency: str,
 ) -> str:
-    """CIQRANGEV formula for pre-calculated multiples (period type + date range).
+    """CIQRANGE formula for pre-calculated multiples (period type + date range).
 
-    CIQRANGEV params: id(1), metric(2), period_type(3), start(4), end(5),
-                      currency(6), primary(7), metatag(8), label(9)
+    CIQRANGE is used instead of CIQRANGEV so each expanded cell retains its
+    source date in the generated CIQ formula.  That lets charts use actual
+    observation dates rather than inventing an evenly-spaced axis.
     """
+    curr_opt = f"Options: Curr={currency.upper()}"
     return (
-        f'=CIQRANGEV({id_ref},"{metric}",{period_type}'
-        f',"{start}","{end}",,,,"{label}")'
+        f'=CIQRANGE({id_ref},"{metric}",{period_type}'
+        f',"{start}","{end}","{curr_opt}",,,"{label}")'
     )
 
 
 def _build_financial_formula(
-    id_ref: str, metric: str, freq_period: str, label: str
+    id_ref: str, metric: str, freq_period: str, label: str, currency: str
 ) -> str:
     """CIQRANGE formula for financial data (period offset).
 
@@ -100,9 +107,10 @@ def _build_financial_formula(
                      periodicity(5), report_type(6), primary(7), metatag(8),
                      currency(9), label(10)
     """
+    curr_opt = f"Options: Curr={currency.upper()}"
     return (
         f'=CIQRANGE({id_ref},"{metric}",{freq_period}'
-        f',,,,,,,"{label}")'
+        f',,,,,,"{curr_opt}","{label}")'
     )
 
 
@@ -119,6 +127,7 @@ def _build_workbook(
     period_type: str,
     frequency: str,
     num_periods: int,
+    currency: str,
 ) -> dict:
     """Build a two-sheet workbook (Resolve + Data) and return column metadata.
 
@@ -171,7 +180,7 @@ def _build_workbook(
                 id_ref = f'"{ticker}"'
                 label = f"{ticker} {metric}"
                 formula = _build_market_formula(
-                    id_ref, metric, start_date, end_date, label
+                    id_ref, metric, start_date, end_date, label, currency
                 )
                 ws_data.cell(row=1, column=col, value=formula)
                 columns.append((col, ticker, metric, label))
@@ -184,7 +193,8 @@ def _build_workbook(
                 id_ref = f'"{ticker}"'
                 label = f"{ticker} {metric}"
                 formula = _build_multiple_formula(
-                    id_ref, metric, period_type, start_date, end_date, label
+                    id_ref, metric, period_type, start_date, end_date, label,
+                    currency,
                 )
                 ws_data.cell(row=1, column=col, value=formula)
                 columns.append((col, ticker, metric, label))
@@ -201,7 +211,7 @@ def _build_workbook(
             # Date column
             date_label = f"{ticker} Date"
             date_formula = _build_financial_formula(
-                id_ref, "IQ_PERIODDATE_BS", period_offset, date_label
+                id_ref, "IQ_PERIODDATE_BS", period_offset, date_label, currency
             )
             ws_data.cell(row=1, column=col, value=date_formula)
             columns.append((col, ticker, "_DATE_", date_label))
@@ -211,7 +221,7 @@ def _build_workbook(
             for metric in metrics:
                 label = f"{ticker} {metric}"
                 formula = _build_financial_formula(
-                    id_ref, metric, period_offset, label
+                    id_ref, metric, period_offset, label, currency
                 )
                 ws_data.cell(row=1, column=col, value=formula)
                 columns.append((col, ticker, metric, label))
@@ -326,25 +336,59 @@ def _read_column_data(ws_com, col: int, last_row: int) -> list:
     return [v[0] if isinstance(v, tuple) else v for v in vals]
 
 
+def _read_column_formulas(ws_com, col: int, last_row: int) -> list:
+    """Read formulas from row 2 to last_row as a flat list."""
+    if last_row < 2:
+        return []
+    if last_row == 2:
+        return [ws_com.Cells(2, col).Formula]
+    formulas = ws_com.Range(
+        ws_com.Cells(2, col),
+        ws_com.Cells(last_row, col),
+    ).Formula
+    return [v[0] if isinstance(v, tuple) else v for v in formulas]
+
+
+_EXPANDED_FORMULA_DATE = re.compile(r'"(\d{1,2}/\d{1,2}/\d{4})"')
+
+
+def _date_from_expanded_formula(formula):
+    """Extract the observation date from an expanded CIQ formula."""
+    if not isinstance(formula, str):
+        return None
+    matches = _EXPANDED_FORMULA_DATE.findall(formula)
+    if not matches:
+        return None
+    try:
+        return pd.Timestamp(matches[-1])
+    except (TypeError, ValueError):
+        return None
+
+
 def _extract_market_or_multiple_data(
     ws_com, columns: list, tickers: list[str], metrics: list[str],
 ) -> dict:
     """Extract data for market or multiple metric types.
 
-    Returns {ticker: {"dates": [...], metric: [...]}} where dates are
-    synthesized from the data point count + known date range.
+    Returns {ticker: {"dates": [...], metric: [...]}} using dates extracted
+    from each expanded CIQ formula.
     """
     data = {}
 
     for col_idx, ticker, metric, label in columns:
         last_row = _find_last_data_row(ws_com, col_idx)
         raw_values = _read_column_data(ws_com, col_idx, last_row)
+        raw_formulas = _read_column_formulas(ws_com, col_idx, last_row)
         values = [safe_float(v) for v in raw_values]
+        dates = [_date_from_expanded_formula(f) for f in raw_formulas]
 
         if ticker not in data:
-            data[ticker] = {"_num_points": len(values)}
+            data[ticker] = {"_num_points": len(values), "_metric_dates": {}}
         data[ticker][metric] = values
-        # Track max length for date synthesis
+        data[ticker]["_metric_dates"][metric] = dates
+        if "dates" not in data[ticker] or len(dates) > len(data[ticker]["dates"]):
+            data[ticker]["dates"] = dates
+        # Track max length for chart-density formatting.
         if len(values) > data[ticker]["_num_points"]:
             data[ticker]["_num_points"] = len(values)
 
@@ -399,35 +443,52 @@ def _extract_financial_data(
 
 
 def _poll_chart_data(ws_com, columns: list, max_wait: float) -> None:
-    """Poll data sheet until formulas resolve or timeout."""
+    """Poll every data column until its expanded range has stabilized."""
     log.info("Waiting for %d data columns (max %ds)...", len(columns), max_wait)
     start = time.monotonic()
-
-    # Check first column as sentinel
-    sentinel_col = columns[0][0]
+    previous_signature = None
+    stable_polls = 0
+    pending_tokens = {"#PEND", "#REFRESH", "CIQRANGE", "CIQRANGEV", "SPGRANGEV"}
 
     while True:
         elapsed = time.monotonic() - start
         if elapsed > max_wait:
-            log.warning("Chart data timeout after %ds — proceeding with available data", max_wait)
+            raise TimeoutError(
+                f"Chart data did not stabilize within {max_wait}s"
+            )
+
+        first_values = []
+        last_rows = []
+        pending = False
+        for col_idx, *_ in columns:
+            value = ws_com.Cells(2, col_idx).Value
+            first_values.append(value)
+            last_rows.append(_find_last_data_row(ws_com, col_idx))
+            if value is None:
+                pending = True
+            elif isinstance(value, str) and value.strip().upper() in pending_tokens:
+                pending = True
+
+        signature = (tuple(last_rows), tuple(map(str, first_values)))
+        if not pending and signature == previous_signature:
+            stable_polls += 1
+        else:
+            stable_polls = 0
+        previous_signature = signature
+
+        if stable_polls >= 2:
+            log.info("All chart columns stabilized after %.0fs", elapsed)
             break
 
-        val = ws_com.Cells(2, sentinel_col).Value
-        if val is not None:
-            if isinstance(val, str) and val.upper() in ("#PEND", "#REFRESH"):
-                pass  # still pending
-            elif isinstance(val, (int, float)) or (isinstance(val, str) and val.upper() not in ("#PEND", "#REFRESH")):
-                # Data arrived — give extra time for all columns to settle
-                log.info("Sentinel data arrived after %.0fs, waiting 15s for all columns...", elapsed)
-                time.sleep(15)
-                break
-
-        if int(elapsed) % 15 < 5:
-            log.debug("%ds: sentinel=%r", elapsed, val)
+        if int(elapsed) % 15 < 2:
+            log.debug(
+                "%ds: pending=%s, stable_polls=%d, last_rows=%s",
+                elapsed, pending, stable_polls, last_rows,
+            )
 
         # Pump COM message queue to prevent STA deadlocks
         pythoncom.PumpWaitingMessages()
-        time.sleep(5)
+        time.sleep(2)
 
 
 # ── Chart rendering ───────────────────────────────────────────────────────
@@ -468,6 +529,34 @@ def _format_date_axis(ax, num_points: int) -> None:
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
 
 
+def _metric_series(ticker_data: dict, metric: str) -> pd.Series:
+    """Return a numeric series indexed by the metric's actual observation dates."""
+    values = ticker_data.get(metric, [])
+    metric_dates = ticker_data.get("_metric_dates", {}).get(metric)
+    dates = metric_dates if metric_dates is not None else ticker_data.get("dates", [])
+    if not values or not dates:
+        return pd.Series(dtype=float)
+
+    paired = []
+    for date, value in zip(dates, values):
+        if date is None or pd.isna(value):
+            continue
+        try:
+            parsed_date = pd.Timestamp(date)
+        except (TypeError, ValueError):
+            continue
+        paired.append((parsed_date, float(value)))
+
+    if not paired:
+        return pd.Series(dtype=float)
+    series = pd.Series(
+        [value for _, value in paired],
+        index=[date for date, _ in paired],
+        dtype=float,
+    )
+    return series.sort_index()
+
+
 def _render_line_chart(
     data: dict,
     metrics: list[str],
@@ -481,29 +570,18 @@ def _render_line_chart(
     """Render a line chart for market or multiple data."""
     fig, ax = plt.subplots(figsize=CHART_DEFAULTS["figsize_line"])
     color_idx = 0
+    plotted = 0
 
     for ticker, ticker_data in data.items():
         num_points = ticker_data.get("_num_points", 0)
         if num_points == 0:
             continue
 
-        end_dt = pd.Timestamp(end_date)
-        start_dt = pd.Timestamp(start_date)
-
         display_name = _display_name(ticker, ticker_names)
 
         for metric in metrics:
-            values = ticker_data.get(metric, [])
-            if not values:
-                continue
-
-            # Build a date axis sized to THIS metric so a shorter series still
-            # spans the full [start, end] range instead of being compressed into
-            # the earliest dates of a longer metric's axis.
-            dates = pd.date_range(start=start_dt, end=end_dt, periods=len(values))
-            series = pd.Series(values, index=dates)
-            series = series.dropna()
-            if len(series) == 0:
+            series = _metric_series(ticker_data, metric)
+            if series.empty:
                 continue
 
             if indexed:
@@ -518,6 +596,14 @@ def _render_line_chart(
             ax.plot(series.index, series.values, label=label,
                     linewidth=CHART_DEFAULTS["line_width"], color=color)
             color_idx += 1
+            plotted += 1
+
+    if plotted == 0:
+        plt.close(fig)
+        raise ValueError(
+            "No dated chart observations were returned. Check identifiers, "
+            "metrics, subscription access, and the requested date range."
+        )
 
     if indexed:
         ax.axhline(y=100, color="gray", linestyle="--", linewidth=0.8, alpha=0.5)
@@ -554,9 +640,8 @@ def _render_bar_chart(
                 all_dates.add(d)
 
     if not all_dates:
-        log.warning("No dates found for bar chart")
-        plt.close()
-        return output_path
+        plt.close(fig)
+        raise ValueError("No dated financial observations were returned for the bar chart")
 
     sorted_dates = sorted(all_dates)
 
@@ -634,29 +719,27 @@ def _render_line_marker_chart(
     """Render a line chart with markers for financial data."""
     fig, ax = plt.subplots(figsize=CHART_DEFAULTS["figsize_line"])
     color_idx = 0
+    plotted = 0
 
     for ticker, ticker_data in data.items():
-        dates = ticker_data.get("dates", [])
         display_name = _display_name(ticker, ticker_names)
 
         for metric in metrics:
-            values = ticker_data.get(metric, [])
-            if not values or not dates:
+            series = _metric_series(ticker_data, metric)
+            if series.empty:
                 continue
-
-            # Pair dates with values, dropping None/NaN
-            paired = [(d, v) for d, v in zip(dates, values) if d is not None and not np.isnan(v)]
-            if not paired:
-                continue
-
-            plot_dates, plot_values = zip(*paired)
             label = display_name if len(metrics) == 1 else f"{display_name} — {metric}"
             color = IB_COLORS[color_idx % len(IB_COLORS)]
 
-            ax.plot(plot_dates, plot_values, label=label,
+            ax.plot(series.index, series.values, label=label,
                     linewidth=CHART_DEFAULTS["line_width"], color=color,
                     marker="o", markersize=5)
             color_idx += 1
+            plotted += 1
+
+    if plotted == 0:
+        plt.close(fig)
+        raise ValueError("No dated financial observations were returned")
 
     ylabel = metrics[0] if len(metrics) == 1 else "Value"
     _apply_chart_style(ax, title, ylabel)
@@ -691,6 +774,7 @@ def _render_dual_axis_chart(
     axes = [ax1, ax2]
     line_styles = ["-", "--"]
     color_idx = 0
+    plotted = 0
 
     for m_idx, metric in enumerate(metrics):
         ax = axes[m_idx]
@@ -701,42 +785,30 @@ def _render_dual_axis_chart(
             label = f"{display_name} — {metric}"
             color = IB_COLORS[color_idx % len(IB_COLORS)]
 
-            if metric_type == "financial":
-                dates = ticker_data.get("dates", [])
-                values = ticker_data.get(metric, [])
-                if not values or not dates:
-                    continue
-                paired = [(d, v) for d, v in zip(dates, values) if d is not None and not np.isnan(v)]
-                if not paired:
-                    continue
-                plot_dates, plot_values = zip(*paired)
-                ax.plot(plot_dates, plot_values, label=label,
-                        linewidth=CHART_DEFAULTS["line_width"], color=color,
-                        linestyle=ls, marker="o" if m_idx == 1 else None,
-                        markersize=4)
-            else:
-                num_points = ticker_data.get("_num_points", 0)
-                values = ticker_data.get(metric, [])
-                if not values or num_points == 0:
-                    continue
+            series = _metric_series(ticker_data, metric)
+            if series.empty:
+                continue
 
-                end_dt = pd.Timestamp(end_date)
-                start_dt = pd.Timestamp(start_date)
-                # Size the axis to this metric's own length (see _render_line_chart).
-                dates = pd.date_range(start=start_dt, end=end_dt, periods=len(values))
-
-                series = pd.Series(values, index=dates).dropna()
-                if len(series) == 0:
-                    continue
-
-                ax.plot(series.index, series.values, label=label,
-                        linewidth=CHART_DEFAULTS["line_width"], color=color,
-                        linestyle=ls)
+            ax.plot(
+                series.index,
+                series.values,
+                label=label,
+                linewidth=CHART_DEFAULTS["line_width"],
+                color=color,
+                linestyle=ls,
+                marker="o" if metric_type == "financial" and m_idx == 1 else None,
+                markersize=4,
+            )
 
             color_idx += 1
+            plotted += 1
 
         ax.set_ylabel(metric, fontsize=CHART_DEFAULTS["axis_label_size"])
         ax.tick_params(labelsize=CHART_DEFAULTS["tick_size"])
+
+    if plotted == 0:
+        plt.close(fig)
+        raise ValueError("No dated observations were returned for the dual-axis chart")
 
     # Styling
     ax1.set_title(title, fontsize=CHART_DEFAULTS["title_size"], fontweight="bold", pad=12)
@@ -770,11 +842,11 @@ def _summarize_data(data: dict) -> dict:
     for ticker, ticker_data in data.items():
         s = {}
         for key, values in ticker_data.items():
-            if key == "_num_points":
+            if key in ("_num_points", "_metric_dates"):
                 continue
             if key == "dates":
                 # Only first and last date
-                valid = [d for d in values if d is not None]
+                valid = sorted(pd.Timestamp(d) for d in values if d is not None)
                 if valid:
                     first = valid[0]
                     last = valid[-1]
@@ -783,7 +855,14 @@ def _summarize_data(data: dict) -> dict:
                         "last": last.strftime("%Y-%m-%d") if hasattr(last, "strftime") else str(last),
                     }
             else:
-                clean = [v for v in values if isinstance(v, (int, float)) and not np.isnan(v)]
+                dated_series = _metric_series(ticker_data, key)
+                if not dated_series.empty:
+                    clean = dated_series.tolist()
+                else:
+                    clean = [
+                        v for v in values
+                        if isinstance(v, (int, float)) and not np.isnan(v)
+                    ]
                 if clean:
                     first_val = clean[0]
                     last_val = clean[-1]
@@ -804,9 +883,30 @@ def _summarize_data(data: dict) -> dict:
     return summarized
 
 
+def _write_raw_chart_csv(data: dict, metrics: list[str], path: str) -> str:
+    """Write actual dated observations in a single normalized CSV table."""
+    with open(path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["Ticker", "Date", *metrics])
+        for ticker, ticker_data in data.items():
+            series_by_metric = {
+                metric: _metric_series(ticker_data, metric)
+                for metric in metrics
+            }
+            nonempty = {k: v for k, v in series_by_metric.items() if not v.empty}
+            if not nonempty:
+                continue
+            frame = pd.concat(nonempty, axis=1).sort_index()
+            for date, row in frame.iterrows():
+                values = ["" if pd.isna(row.get(metric)) else row.get(metric) for metric in metrics]
+                writer.writerow([ticker, pd.Timestamp(date).strftime("%Y-%m-%d"), *values])
+    return path
+
+
 # ── Main pipeline ─────────────────────────────────────────────────────────
 
 
+@com_initialized
 def run_chart(
     tickers: list[str],
     metrics: list[str],
@@ -860,8 +960,6 @@ def run_chart(
     -------
     dict with keys: chart_path, data (summary stats per ticker), chart_config.
     """
-    pythoncom.CoInitialize()
-
     from capiq_excel.excel_lifecycle import launch_excel_isolated, close_session
 
     # ── Validate inputs ──
@@ -869,16 +967,28 @@ def run_chart(
         raise ValueError(f"Invalid metric_type '{metric_type}'. Use: {VALID_METRIC_TYPES}")
     if chart_type not in VALID_CHART_TYPES:
         raise ValueError(f"Invalid chart_type '{chart_type}'. Use: {VALID_CHART_TYPES}")
+    if not tickers:
+        raise ValueError("tickers must not be empty")
+    if not metrics:
+        raise ValueError("metrics must not be empty")
+    if max_wait <= 0:
+        raise ValueError("max_wait must be greater than zero")
+    if num_periods <= 0:
+        raise ValueError("num_periods must be greater than zero")
+    if frequency not in ("Q", "Y"):
+        raise ValueError("frequency must be 'Q' or 'Y'")
+    currency = currency.strip().upper()
+    if not currency:
+        raise ValueError("currency must not be empty")
     if chart_type == "dual_axis" and len(metrics) != 2:
         raise ValueError("dual_axis chart requires exactly 2 metrics")
+    if indexed and metric_type == "financial":
+        raise ValueError("indexed mode is only supported for market or multiple data")
 
-    # The plain "line" renderer synthesizes an evenly-spaced date axis from a
-    # point count, which financial data (grouped by explicit period dates) does
-    # not provide — it would render an empty chart.  Route financial line
-    # charts to the marker renderer, which plots against the real period dates.
+    # Financial series are discrete fiscal periods, so show markers by default.
     if metric_type == "financial" and chart_type == "line":
         log.info("metric_type=financial: rendering 'line_marker' instead of 'line' "
-                 "(plain line needs synthesized market dates)")
+                 "(financial observations are discrete fiscal periods)")
         chart_type = "line_marker"
 
     # ── Resolve dates ──
@@ -894,6 +1004,8 @@ def run_chart(
 
     if output_path is None:
         output_path = os.path.abspath("chart_output.png")
+    else:
+        output_path = os.path.abspath(output_path)
 
     # ── Auto-generate title ──
     if title is None:
@@ -910,53 +1022,48 @@ def run_chart(
         else:
             title = f"{metric_labels} — {ticker_str}"
 
-    # ── Build workbook ──
-    xlsx_path = os.path.abspath("_chart_mcp_temp.xlsx")
-
-    col_meta = _build_workbook(
-        xlsx_path, tickers, metrics, metric_type,
-        start_date, end_date, period_type, frequency, num_periods,
-    )
-    columns = col_meta["columns"]
-
     log.info(
         "Chart pull: %d tickers, %d metrics, type=%s, chart=%s",
         len(tickers), len(metrics), metric_type, chart_type,
     )
 
-    # ── Launch Excel and process ──
-    session = launch_excel_isolated(xlsx_path)
-    try:
-        excel = session.excel
-        log.info("Connected to Excel %s for chart data", excel.Version)
+    # Build and process the workbook in a unique directory so concurrent runs
+    # cannot collide with each other or overwrite a user's similarly named file.
+    with tempfile.TemporaryDirectory(prefix="capiq-chart-") as temp_dir:
+        xlsx_path = os.path.join(temp_dir, "chart.xlsx")
+        col_meta = _build_workbook(
+            xlsx_path, tickers, metrics, metric_type,
+            start_date, end_date, period_type, frequency, num_periods, currency,
+        )
+        columns = col_meta["columns"]
 
-        # Trigger refresh on both sheets
-        log.info("Calling RefreshWorkbook...")
+        session = launch_excel_isolated(xlsx_path)
         try:
+            excel = session.excel
+            log.info("Connected to Excel %s for chart data", excel.Version)
+
+            log.info("Calling RefreshWorkbook...")
+            try:
+                pythoncom.PumpWaitingMessages()
+                excel.Run("SNLXLAddin.xla!RefreshWorkbook")
+                log.info("RefreshWorkbook executed")
+            except Exception as e:
+                log.warning("RefreshWorkbook warning: %s", e)
             pythoncom.PumpWaitingMessages()
-            excel.Run("SNLXLAddin.xla!RefreshWorkbook")
-            log.info("RefreshWorkbook executed")
-        except Exception as e:
-            log.warning("RefreshWorkbook warning: %s", e)
-        pythoncom.PumpWaitingMessages()
 
-        # Poll Data sheet for completion
-        ws_data = session.workbook.Sheets("Data")
-        _poll_chart_data(ws_data, columns, max_wait)
+            ws_data = session.workbook.Sheets("Data")
+            _poll_chart_data(ws_data, columns, max_wait)
 
-        # Read resolution from Resolve sheet
-        ws_resolve = session.workbook.Sheets("Resolve")
-        resolution_notes, ticker_names = _read_resolution(ws_resolve, len(tickers))
+            ws_resolve = session.workbook.Sheets("Resolve")
+            resolution_notes, ticker_names = _read_resolution(ws_resolve, len(tickers))
 
-        # Extract time-series data
-        log.info("Extracting chart data...")
-        if metric_type in ("market", "multiple"):
-            data = _extract_market_or_multiple_data(ws_data, columns, tickers, metrics)
-        else:
-            data = _extract_financial_data(ws_data, columns, tickers, metrics)
-
-    finally:
-        close_session(session, save=False, delete_workbook=True)
+            log.info("Extracting chart data...")
+            if metric_type in ("market", "multiple"):
+                data = _extract_market_or_multiple_data(ws_data, columns, tickers, metrics)
+            else:
+                data = _extract_financial_data(ws_data, columns, tickers, metrics)
+        finally:
+            close_session(session, save=False, delete_workbook=False)
 
     # ── Render chart ──
     log.info("Rendering %s chart...", chart_type)
@@ -1008,30 +1115,17 @@ def run_chart(
                 data_summary[ticker]["_resolved_iq_id"] = note["iq_id"]
 
     # Also dump raw data as CSV if available
-    raw_csv_path = chart_path.replace(".png", "_raw.csv") if chart_path else None
+    raw_csv_path = f"{os.path.splitext(chart_path)[0]}_raw.csv" if chart_path else None
     if raw_csv_path and data:
         try:
-            import csv, datetime as _dt
-            with open(raw_csv_path, "w", newline="") as f:
-                writer = csv.writer(f)
-                for ticker, tdata in data.items():
-                    dates = tdata.get("dates", [])
-                    metric_keys = [k for k in tdata if k not in ("dates", "_num_points")]
-                    header = ["Ticker", "Date"] + metric_keys
-                    writer.writerow(header)
-                    n = max(len(dates), max((len(tdata[m]) for m in metric_keys), default=0))
-                    for i in range(n):
-                        d = dates[i] if i < len(dates) else ""
-                        if isinstance(d, _dt.datetime):
-                            d = d.strftime("%Y-%m-%d")
-                        row = [ticker, d] + [tdata[m][i] if i < len(tdata[m]) else "" for m in metric_keys]
-                        writer.writerow(row)
+            _write_raw_chart_csv(data, metrics, raw_csv_path)
             log.info("Raw data CSV saved: %s", raw_csv_path)
         except Exception as e:
             log.warning("Failed to write raw CSV: %s", e)
 
     return {
         "chart_path": chart_path.replace("\\", "/"),
+        "raw_csv_path": raw_csv_path.replace("\\", "/") if raw_csv_path else None,
         "data": data_summary,
         "chart_config": chart_config,
     }

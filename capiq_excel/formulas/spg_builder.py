@@ -15,9 +15,9 @@ Options are passed as a key=value string:
 """
 from __future__ import annotations
 
-from typing import Optional
-
+from capiq_excel.config import MetricType
 from capiq_excel.formulas.base import DialectBuilder, QuerySpec
+from capiq_excel.tools.dates import freq_and_periods_to_begin_date_str, today_as_str
 
 
 # Map our canonical frequency codes to SPG period prefix
@@ -58,8 +58,15 @@ class SpgBuilder(DialectBuilder):
         identifier = spec.identifiers[0]
         opts = spec.options.to_spg_options_string()
 
-        begin = spec.begin_date or _begin_period_code(spec.frequency, spec.num_periods)
-        end = spec.end_date or _end_period_code(spec.frequency)
+        if spec.metric_type == MetricType.MARKET:
+            begin = spec.begin_date or freq_and_periods_to_begin_date_str(
+                spec.frequency,
+                spec.num_periods,
+            )
+            end = spec.end_date or today_as_str()
+        else:
+            begin = spec.begin_date or _begin_period_code(spec.frequency, spec.num_periods)
+            end = spec.end_date or _end_period_code(spec.frequency)
 
         parts = [
             f'"{identifier}"',

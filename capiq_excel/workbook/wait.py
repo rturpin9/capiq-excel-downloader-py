@@ -1,11 +1,18 @@
 import time
-from ..exceptions import WorkbookClosedException, CapitalIQInactiveException
+from ..exceptions import (
+    WorkbookClosedException,
+    CapitalIQInactiveException,
+    RefreshTimeoutError,
+)
 
-def _wait_for_capiq_result(excel):
-    finished = False
-    while not finished:
-        time.sleep(1)
-        finished = _capiq_is_done(excel)
+def _wait_for_capiq_result(excel, timeout_seconds=240, poll_interval=1):
+    deadline = time.monotonic() + timeout_seconds
+    while not _capiq_is_done(excel):
+        if time.monotonic() >= deadline:
+            raise RefreshTimeoutError(
+                f"Capital IQ did not return data within {timeout_seconds}s"
+            )
+        time.sleep(poll_interval)
 
     return True
 
@@ -24,7 +31,7 @@ def _ciq_not_working(excel):
 
 
 def _data_in_a2(excel):
-    a2 = _get_cell_value_by_index(excel, 1, 2)
+    a2 = _get_cell_value_by_index(excel, 2, 1)
     return a2 is not None
 
 def _get_cell_value_by_index(excel, x, y):

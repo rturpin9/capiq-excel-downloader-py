@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from capiq_excel.config import MetricType
+from capiq_excel.config import FormulaOptions, MetricType
 from capiq_excel.formulas.base import DialectBuilder, QuerySpec
 from capiq_excel.tools.dates import freq_and_periods_to_begin_date_str, today_as_str
 
@@ -20,7 +20,10 @@ from capiq_excel.tools.dates import freq_and_periods_to_begin_date_str, today_as
 # function it replaces, so they can be used interchangeably by create.py.
 # ---------------------------------------------------------------------------
 
-def make_financial_command(builder: DialectBuilder):
+def make_financial_command(
+    builder: DialectBuilder,
+    options: Optional[FormulaOptions] = None,
+):
     """Return a financial-data command function bound to *builder*."""
     def command(company_id: str, data_item: str, freq: str = 'Q', num_periods: int = 80,
                 data_item_label: Optional[str] = None) -> str:
@@ -31,12 +34,16 @@ def make_financial_command(builder: DialectBuilder):
             frequency=freq,
             num_periods=num_periods,
             label=data_item_label,
+            options=options or FormulaOptions(),
         )
         return builder.build_range(spec)
     return command
 
 
-def make_market_command(builder: DialectBuilder):
+def make_market_command(
+    builder: DialectBuilder,
+    options: Optional[FormulaOptions] = None,
+):
     """Return a market-data command function bound to *builder*."""
     def command(company_id: str, data_item: str, freq: str = 'Q', num_periods: int = 80,
                 data_item_label: Optional[str] = None) -> str:
@@ -47,12 +54,16 @@ def make_market_command(builder: DialectBuilder):
             frequency=freq,
             num_periods=num_periods,
             label=data_item_label,
+            options=options or FormulaOptions(),
         )
         return builder.build_range(spec)
     return command
 
 
-def make_holdings_command(builder: DialectBuilder):
+def make_holdings_command(
+    builder: DialectBuilder,
+    options: Optional[FormulaOptions] = None,
+):
     """Return a holdings command function bound to *builder*."""
     def command(company_id: str, data_item: str, date_str: str,
                 data_item_label: Optional[str] = None) -> str:
@@ -62,6 +73,7 @@ def make_holdings_command(builder: DialectBuilder):
             metric_type=MetricType.OWNERSHIP,
             begin_date=date_str,
             label=data_item_label,
+            options=options or FormulaOptions(),
         )
         return builder.build_range(spec)
     return command
@@ -104,7 +116,7 @@ def financial_data_command(company_id: str, data_item: str, freq: str='Q', num_p
     if data_item_label is None:
         data_item_label = data_item
 
-    return f'=CIQRANGE("{company_id}", "{data_item}", IQ_F{freq} - {num_periods}, , , , , , "{data_item_label}")'
+    return f'=CIQRANGE("{company_id}", "{data_item}", IQ_F{freq} - {num_periods}, , , , , , , "{data_item_label}")'
 
 
 def market_data_command(company_id: str, data_item: str, freq: str='Q', num_periods: int=80,
@@ -130,7 +142,7 @@ def market_data_command(company_id: str, data_item: str, freq: str='Q', num_peri
     if data_item_label is None:
         data_item_label = data_item
 
-    return f'=CIQRANGE("{company_id}", "{data_item}", "{begin_date}", "{end_date}", , , , , "{data_item_label}")'
+    return f'=CIQRANGE("{company_id}", "{data_item}", "{begin_date}", "{end_date}", , , , , , "{data_item_label}")'
 
 
 def holdings_command(company_id, data_item, date_str, data_item_label=None):

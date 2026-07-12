@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -17,6 +18,7 @@ from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 
 import pythoncom
+from capiq_excel.excel_lifecycle import com_initialized
 
 log = logging.getLogger("capiq_excel")
 
@@ -680,18 +682,22 @@ def poll_for_completion(ws_com, num_companies: int, num_metrics: int,
     first_col = 2
     last_col = num_metrics + 1
 
-    # Primary rows are odd-indexed (rows 2, 4, 6, ...) — these have the real data.
-    # Fallback rows are even-indexed (rows 3, 5, 7, ...) — CIQRANGEA lookups that
-    # may stay #PEND indefinitely.  We exit as soon as primary rows are resolved,
-    # rather than waiting for fallback rows that may never settle.
-    primary_row_indices = list(range(0, total_rows, 2))      # 0, 2, 4, ...
-    num_primary_cells = num_companies * num_metrics
+    def is_pending(value) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, int) and value == -2146826259:  # #NAME? / UDF not ready
+            return True
+        return (
+            isinstance(value, str)
+            and value.strip().upper() in ("#PEND", "#REFRESH")
+        )
 
     while True:
         elapsed = time.monotonic() - start
         if elapsed > max_wait:
-            log.warning("Timeout after %ds — proceeding with available data", max_wait)
-            break
+            raise TimeoutError(
+                f"Comparable-company data did not settle within {max_wait}s"
+            )
 
         # Single batch COM read for all formula cells
         data = ws_com.Range(
@@ -699,24 +705,23 @@ def poll_for_completion(ws_com, num_companies: int, num_metrics: int,
             ws_com.Cells(last_row, last_col),
         ).Value
 
-        # Check primary rows only for exit condition
-        primary_pending = False
-        primary_resolved = 0
-        for i in primary_row_indices:
-            for val in data[i]:
-                if isinstance(val, str) and val.upper() in ('#PEND', '#REFRESH'):
-                    primary_pending = True
-                elif val is not None and not (isinstance(val, (int, float)) and val < -2000000000):
-                    primary_resolved += 1
+        settled_companies = 0
+        for comp_idx in range(num_companies):
+            primary = data[comp_idx * 2]
+            fallback = data[comp_idx * 2 + 1]
+            primary_name = primary[0]
+            chosen = primary if not is_error_value(primary_name) else fallback
+            if all(not is_pending(value) for value in chosen):
+                settled_companies += 1
 
-        if not primary_pending and primary_resolved > num_primary_cells * 0.5:
-            log.info("Data ready: %d/%d primary cells resolved in %.0fs",
-                     primary_resolved, num_primary_cells, elapsed)
+        if settled_companies == num_companies:
+            log.info("Data ready: %d/%d companies settled in %.0fs",
+                     settled_companies, num_companies, elapsed)
             break
 
         if int(elapsed) % 15 < 5:
-            log.debug("%ds: %d/%d primary resolved, pending=%s",
-                      elapsed, primary_resolved, num_primary_cells, primary_pending)
+            log.debug("%ds: %d/%d companies settled",
+                      elapsed, settled_companies, num_companies)
 
         # Pump COM message queue to prevent STA deadlocks
         pythoncom.PumpWaitingMessages()
@@ -725,6 +730,7 @@ def poll_for_completion(ws_com, num_companies: int, num_metrics: int,
 
 # ── Main pipeline ──────────────────────────────────────────────────────────
 
+@com_initialized
 def run_comps(
     tickers: list[str],
     currency: str = "CAD",
@@ -758,16 +764,24 @@ def run_comps(
     dict
         Structured result with companies array and resolution_notes.
     """
-    pythoncom.CoInitialize()
-
     from capiq_excel.excel_lifecycle import launch_excel_isolated, close_session
+
+    if not tickers:
+        raise ValueError("tickers must not be empty")
+    if mode not in ("lease-adjusted", "excluding-leases"):
+        raise ValueError("mode must be 'lease-adjusted' or 'excluding-leases'")
+    if max_wait <= 0:
+        raise ValueError("max_wait must be greater than zero")
+    currency = currency.strip().upper()
+    if not currency:
+        raise ValueError("currency must not be empty")
 
     # Resolve date
     if date is None:
         now = datetime.now()
         date = f"{now.month}/{now.day}/{now.year}"
 
-    curr_opt = f"Options: Curr={currency.upper()}"
+    curr_opt = f"Options: Curr={currency}"
 
     # Select metrics
     metrics = METRICS_LEASE_ADJUSTED if mode == "lease-adjusted" else METRICS_EXCLUDING_LEASES
@@ -778,40 +792,35 @@ def run_comps(
         extra_specs, extra_tuples = resolve_extras(extras)
         metrics = list(metrics) + extra_tuples
 
-    xlsx_path = os.path.abspath("_comps_mcp_temp.xlsx")
-
     log.info("Comp pull: %d tickers, mode=%s, currency=%s, date=%s, extras=%s",
              len(tickers), mode, currency, date,
              [s.key for s in extra_specs] if extra_specs else "none")
 
-    # Build workbook
-    build_workbook(xlsx_path, tickers, metrics, date, curr_opt)
+    with tempfile.TemporaryDirectory(prefix="capiq-comps-") as temp_dir:
+        xlsx_path = os.path.join(temp_dir, "comps.xlsx")
+        build_workbook(xlsx_path, tickers, metrics, date, curr_opt)
 
-    # Launch Excel and process
-    session = launch_excel_isolated(xlsx_path)
-    try:
-        excel = session.excel
-        log.info("Connected to Excel %s", excel.Version)
-        ws_com = session.workbook.Sheets(1)
-
-        # Trigger refresh
-        log.info("Calling RefreshSheet...")
+        session = launch_excel_isolated(xlsx_path)
         try:
+            excel = session.excel
+            log.info("Connected to Excel %s", excel.Version)
+            ws_com = session.workbook.Sheets(1)
+
+            log.info("Calling RefreshSheet...")
+            try:
+                pythoncom.PumpWaitingMessages()
+                excel.Run("SNLXLAddin.xla!RefreshSheet")
+                log.info("RefreshSheet executed")
+            except Exception as e:
+                log.warning("RefreshSheet warning: %s", e)
             pythoncom.PumpWaitingMessages()
-            excel.Run("SNLXLAddin.xla!RefreshSheet")
-            log.info("RefreshSheet executed")
-        except Exception as e:
-            log.warning("RefreshSheet warning: %s", e)
-        pythoncom.PumpWaitingMessages()
 
-        # Poll for completion
-        poll_for_completion(ws_com, len(tickers), len(metrics), max_wait)
+            poll_for_completion(ws_com, len(tickers), len(metrics), max_wait)
 
-        # Read results
-        log.info("Reading data...")
-        results, resolution_notes = read_results(ws_com, len(tickers), metrics)
-    finally:
-        close_session(session, save=False, delete_workbook=True)
+            log.info("Reading data...")
+            results, resolution_notes = read_results(ws_com, len(tickers), metrics)
+        finally:
+            close_session(session, save=False, delete_workbook=False)
 
     # Build table
     if mode == "lease-adjusted":

@@ -1,6 +1,5 @@
 """Tests for config module."""
 import os
-import pytest
 from capiq_excel.config import (
     CapiqConfig, FormulaDialect, AddinMode, RefreshScope, FormulaOptions
 )
@@ -39,6 +38,14 @@ class TestCapiqConfigFromEnv:
         cfg = CapiqConfig.from_env()
         assert cfg.formula_dialect == FormulaDialect.AUTO
         assert cfg.addin_mode == AddinMode.AUTO
+
+    def test_reads_formula_options_and_retry_delay(self, monkeypatch):
+        monkeypatch.setenv("CAPIQ_CURRENCY", "USD")
+        monkeypatch.setenv("CAPIQ_MAGNITUDE", "Millions")
+        monkeypatch.setenv("CAPIQ_RETRY_DELAY", "7")
+        cfg = CapiqConfig.from_env()
+        assert cfg.formula_options.to_spg_options_string() == "Curr=USD,Mag=Millions"
+        assert cfg.retry.retry_delay_seconds == 7
 
 
 class TestResolveDialect:

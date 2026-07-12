@@ -7,12 +7,13 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
 import time
 
 import pythoncom
 from openpyxl import Workbook
 
-from capiq_excel.engines.comps import _ERROR_TOKENS
+from capiq_excel.engines.comps import is_error_value
 
 log = logging.getLogger("capiq_excel")
 
@@ -52,137 +53,114 @@ def build_id_workbook(path: str, identifiers: list[str]) -> None:
 
 
 def run_id_lookup(identifiers: list[str], max_wait: int = 60) -> dict:
-    """Resolve identifiers to CIQ IQ IDs and company names.
-
-    Parameters
-    ----------
-    identifiers : list[str]
-        Tickers, company names, CUSIPs, ISINs, etc.
-    max_wait : int
-        Max seconds to wait for formula refresh.
-
-    Returns
-    -------
-    dict
-        {"results": [{"input": ..., "iq_id": ..., "company_name": ..., "status": ...}]}
-    """
-    pythoncom.CoInitialize()
+    """Resolve identifiers to CIQ IQ IDs and company names."""
+    if not identifiers:
+        raise ValueError("identifiers must not be empty")
+    if max_wait <= 0:
+        raise ValueError("max_wait must be greater than zero")
 
     from capiq_excel.excel_lifecycle import launch_excel_isolated, close_session
 
-    xlsx_path = os.path.abspath("_id_lookup_mcp_temp.xlsx")
-    build_id_workbook(xlsx_path, identifiers)
-
-    session = launch_excel_isolated(xlsx_path)
+    pythoncom.CoInitialize()
     try:
-        excel = session.excel
-        log.info("Connected to Excel %s for ID lookup", excel.Version)
-        ws_com = session.workbook.Sheets(1)
+        with tempfile.TemporaryDirectory(prefix="capiq-lookup-") as temp_dir:
+            xlsx_path = os.path.join(temp_dir, "lookup.xlsx")
+            build_id_workbook(xlsx_path, identifiers)
 
-        # Trigger refresh
-        log.info("Calling RefreshSheet for ID lookup...")
-        try:
-            pythoncom.PumpWaitingMessages()
-            excel.Run("SNLXLAddin.xla!RefreshSheet")
-            log.info("RefreshSheet executed for ID lookup")
-        except Exception as e:
-            log.warning("RefreshSheet warning: %s", e)
-        pythoncom.PumpWaitingMessages()
+            session = launch_excel_isolated(xlsx_path)
+            try:
+                excel = session.excel
+                log.info("Connected to Excel %s for ID lookup", excel.Version)
+                ws_com = session.workbook.Sheets(1)
 
-        # Poll for completion — batch read CIQRANGEA spill cells.
-        # Exit when ALL cells resolve, OR when the resolved count
-        # stabilizes (stops increasing for 3 consecutive polls),
-        # meaning remaining cells are stuck on #PEND/#ERROR.
-        n = len(identifiers)
-        start = time.monotonic()
-        prev_resolved = -1
-        stable_count = 0
+                log.info("Calling RefreshSheet for ID lookup...")
+                try:
+                    pythoncom.PumpWaitingMessages()
+                    excel.Run("SNLXLAddin.xla!RefreshSheet")
+                    log.info("RefreshSheet executed for ID lookup")
+                except Exception as e:
+                    log.warning("RefreshSheet warning: %s", e)
+                pythoncom.PumpWaitingMessages()
 
-        while True:
-            elapsed = time.monotonic() - start
-            if elapsed > max_wait:
-                log.warning("ID lookup timeout after %ds", max_wait)
-                break
+                n = len(identifiers)
+                start = time.monotonic()
+                while True:
+                    elapsed = time.monotonic() - start
+                    if elapsed > max_wait:
+                        log.warning("ID lookup timeout after %ds", max_wait)
+                        break
 
-            # Single batch read for spill column
-            if n == 1:
-                spill_vals = ((ws_com.Cells(2, 3).Value,),)
-            else:
-                spill_vals = ws_com.Range(
-                    ws_com.Cells(2, 3), ws_com.Cells(1 + n, 3)
-                ).Value
+                    if n == 1:
+                        spill_vals = ((ws_com.Cells(2, 3).Value,),)
+                    else:
+                        spill_vals = ws_com.Range(
+                            ws_com.Cells(2, 3), ws_com.Cells(1 + n, 3)
+                        ).Value
 
-            resolved = 0
-            pending = 0
-            for row_tuple in spill_vals:
-                val = row_tuple[0]
-                if val is None:
-                    pending += 1
-                elif isinstance(val, str) and val.upper() in ('#PEND', '#REFRESH'):
-                    pending += 1
+                    pending = 0
+                    for row_tuple in spill_vals:
+                        value = row_tuple[0]
+                        if value is None:
+                            pending += 1
+                        elif isinstance(value, str) and value.strip().upper() in (
+                            "#PEND", "#REFRESH"
+                        ):
+                            pending += 1
+                        elif isinstance(value, int) and value == -2146826259:
+                            pending += 1
+
+                    log.debug(
+                        "ID lookup %ds: %d/%d settled, %d pending",
+                        elapsed, n - pending, n, pending,
+                    )
+                    if pending == 0:
+                        break
+
+                    pythoncom.PumpWaitingMessages()
+                    time.sleep(2)
+
+                if n == 1:
+                    result_vals = ((
+                        ws_com.Cells(2, 3).Value,
+                        ws_com.Cells(2, 4).Value,
+                    ),)
                 else:
-                    resolved += 1
+                    result_vals = ws_com.Range(
+                        ws_com.Cells(2, 3), ws_com.Cells(1 + n, 4)
+                    ).Value
 
-            log.debug("ID lookup %ds: %d/%d resolved, %d pending",
-                      elapsed, resolved, n, pending)
+                results = []
+                for idx, ident in enumerate(identifiers):
+                    iq_id = result_vals[idx][0]
+                    company_name = result_vals[idx][1]
+                    if is_error_value(iq_id):
+                        results.append({
+                            "input": ident,
+                            "iq_id": None,
+                            "company_name": None,
+                            "status": "FAILED",
+                        })
+                    else:
+                        name = (
+                            company_name
+                            if isinstance(company_name, str)
+                            and not is_error_value(company_name)
+                            else None
+                        )
+                        results.append({
+                            "input": ident,
+                            "iq_id": str(iq_id),
+                            "company_name": name,
+                            "status": "OK",
+                        })
+            finally:
+                close_session(session, save=False, delete_workbook=False)
 
-            if pending == 0:
-                log.info("ID lookup fully resolved in %.0fs (%d/%d)", elapsed, resolved, n)
-                break
-
-            # If resolved count hasn't changed for 3 polls (~6s), remaining
-            # cells are stuck — proceed with what we have.
-            if resolved == prev_resolved and resolved > 0:
-                stable_count += 1
-                if stable_count >= 3:
-                    log.info("ID lookup settled in %.0fs (%d/%d resolved, %d stuck)",
-                             elapsed, resolved, n, pending)
-                    break
-            else:
-                stable_count = 0
-            prev_resolved = resolved
-
-            # Pump COM message queue to prevent STA deadlocks
-            pythoncom.PumpWaitingMessages()
-            time.sleep(2)
-
-        # Batch read results (columns C-D)
-        if n == 1:
-            result_vals = ((ws_com.Cells(2, 3).Value, ws_com.Cells(2, 4).Value),)
-        else:
-            result_vals = ws_com.Range(
-                ws_com.Cells(2, 3), ws_com.Cells(1 + n, 4)
-            ).Value
-
-        results = []
-        for idx, ident in enumerate(identifiers):
-            iq_id = result_vals[idx][0]
-            company_name = result_vals[idx][1]
-
-            # Classify result
-            if iq_id is None or (isinstance(iq_id, str) and
-                                  any(tok in iq_id.upper() for tok in _ERROR_TOKENS)):
-                results.append({
-                    "input": ident,
-                    "iq_id": None,
-                    "company_name": None,
-                    "status": "FAILED",
-                })
-            else:
-                name = None
-                if company_name and isinstance(company_name, str):
-                    upper = company_name.upper()
-                    if not any(tok in upper for tok in _ERROR_TOKENS):
-                        name = company_name
-                results.append({
-                    "input": ident,
-                    "iq_id": str(iq_id),
-                    "company_name": name,
-                    "status": "OK",
-                })
+        log.info(
+            "ID lookup complete: %d/%d resolved",
+            sum(1 for result in results if result["status"] == "OK"),
+            len(results),
+        )
+        return {"results": results}
     finally:
-        close_session(session, save=False, delete_workbook=True)
-
-    log.info("ID lookup complete: %d/%d resolved",
-             sum(1 for r in results if r["status"] == "OK"), len(results))
-    return {"results": results}
+        pythoncom.CoUninitialize()
